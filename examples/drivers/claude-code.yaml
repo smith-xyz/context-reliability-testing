@@ -1,0 +1,12 @@
+# Claude Code CLI driver.
+# Requires: `claude` CLI installed and authenticated.
+#
+# --output-format json|stream-json enables token/cost extraction.
+# --dangerously-skip-permissions auto-approves tool actions.
+# Use --allowedTools to restrict: "Edit,Read,Bash"
+#
+# Vertex: add --model vertex/claude-sonnet-4-20250514
+
+driver:
+  command: ["claude", "--output-format", "stream-json", "--verbose", "--dangerously-skip-permissions", "-p"]
+  prompt_mode: arg

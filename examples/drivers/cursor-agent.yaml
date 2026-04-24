@@ -1,0 +1,21 @@
+# Cursor Agent CLI driver.
+#
+# Requires: `agent` CLI installed (`curl https://cursor.com/install -fsSL | bash`)
+# and authenticated (`cursor auth login` or API key).
+#
+# SECURITY: --no-interactive auto-approves actions without user confirmation.
+# CRT runs agents in isolated worktrees, but review your command flags and
+# sandbox settings before running.
+#
+# Prompt is appended as the last argument (prompt_mode: arg).
+# --no-interactive disables user prompts so it runs headless.
+#
+# With model selection:
+#   command: ["agent", "--no-interactive", "--model", "claude-sonnet-4-20250514"]
+#
+# Default model:
+#   command: ["agent", "--no-interactive"]
+
+driver:
+  command: ["agent", "--no-interactive"]
+  prompt_mode: arg

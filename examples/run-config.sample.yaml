@@ -1,0 +1,62 @@
+# Sample run configuration.
+# See schema/run-config.schema.json for field definitions.
+
+# Driver command for the agent CLI. CRT appends the prompt as the last arg.
+# Include --output-format to get token/cost metrics in results:
+#   json: single JSON envelope with result + usage (recommended)
+#   stream-json: NDJSON streaming — requires --verbose with -p
+# Without --output-format, CRT captures wall time only (tokens/cost show as 0).
+driver:
+  command: ["claude", "--dangerously-skip-permissions", "--output-format", "json", "-p"]
+  prompt_mode: arg
+
+agent:
+  model: claude-sonnet-4-20250514
+  # 0 = deterministic (best for single-trial A/B). Raise for multi-trial variance.
+  temperature: 0
+  # Max agent tool-use iterations before CRT kills the run.
+  max_steps: 50
+  # Free-form labels recorded in results.json — for your own tracking.
+  annotations:
+    tool_policy: default
+    env: local
+
+# Globs matching context files in the repo. Before each trial, CRT strips
+# ALL files matching these patterns from the worktree, then restores only
+# the ones listed in the active condition. This is how A/B works — without
+# context_patterns, both conditions see identical files.
+context_patterns:
+  - "AGENTS.md"
+  - "CLAUDE.md"
+  - ".cursorrules"
+  - ".cursor/rules/*.md"
+
+# Each condition is a context variant the agent sees during a trial.
+# CRT strips all context_patterns files, then restores only these.
+conditions:
+  no_context:
+    context_files: []          # bare repo — no guidance files
+  full_context:
+    context_files:             # everything the repo ships
+      - AGENTS.md
+      - .cursor/rules/*.md
+  custom_rules:
+    context_files:             # inject your own custom context files
+      - AGENTS.md
+      - .cursor/rules/style.md
+    source_dir: ./fixtures/custom_rules/   # reads files from here instead of the repo
+
+# Template wrapping each task prompt before sending to the agent.
+# Available variables: {prompt}, {acceptance_cmd}, {task_id}
+prompt_template: |
+  You are working in a Git repository. Your task:
+
+  {prompt}
+
+  When done, this command verifies your work: {acceptance_cmd}
+
+# For statistical significance, use trials >= 3 with temperature > 0.
+# With temperature=0, repeated trials on the same model produce identical
+# results — stddev will be 0 and the data adds no signal.
+trials: 1
+output_dir: out/

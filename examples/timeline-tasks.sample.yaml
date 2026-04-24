@@ -1,0 +1,49 @@
+# Sequential tasks for timeline evaluation.
+# Each task represents a step the agent performs cumulatively on the same worktree.
+# The agent's codebase diverges from the real history — crt tracks that divergence.
+#
+# Replace the prompts, commits, and test commands with values from your repo.
+# Or skip this file and use --range to auto-derive tasks from git log:
+#   crt run --config my-config.yaml --range abc123..def456 --acceptance-cmd "pytest"
+
+- id: step-1-fix-bug
+  prompt: |
+    The parse_input function crashes on empty strings. Add a guard clause
+    that returns an empty result instead of raising.
+  task_order: 1
+  resolved_commit: "replace-with-real-sha"
+  acceptance:
+    type: test_command
+    command: pytest tests/ -x
+  marker: "v1.1 — input validation"
+  metadata:
+    difficulty: easy
+    category: bugfix
+
+- id: step-2-add-feature
+  prompt: |
+    Add a --verbose flag to the CLI that prints detailed progress during
+    processing. Wire it through to the logger.
+  task_order: 2
+  resolved_commit: "replace-with-real-sha"
+  acceptance:
+    type: test_command
+    command: pytest tests/ -x
+  marker: "v1.2 — verbose flag"
+  metadata:
+    difficulty: medium
+    category: feature
+
+- id: step-3-refactor
+  prompt: |
+    Extract the HTTP retry logic from client.py into a reusable
+    retry_with_backoff decorator in utils.py.
+  task_order: 3
+  resolved_commit: "replace-with-real-sha"
+  acceptance:
+    type: test_command
+    command: pytest tests/ -x
+  marker: "v1.3 — retry extraction"
+  metadata:
+    difficulty: medium
+    category: refactor

@@ -1,0 +1,180 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "run-config.schema.json",
+  "title": "RunConfig",
+  "description": "Agent stack + conditions for an evaluation run.",
+  "type": "object",
+  "required": [
+    "agent",
+    "conditions"
+  ],
+  "properties": {
+    "agent": {
+      "type": "object",
+      "required": [
+        "model"
+      ],
+      "properties": {
+        "model": {
+          "type": "string",
+          "description": "Model identifier."
+        },
+        "temperature": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 2,
+          "default": 0
+        },
+        "max_steps": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 50
+        },
+        "annotations": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {},
+          "description": "Free-form labels recorded in results for user tracking."
+        }
+      }
+    },
+    "conditions": {
+      "type": "object",
+      "description": "Named context conditions. Each key maps to a context bundle.",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "context_files": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Context file paths to preserve or inject into the worktree."
+          },
+          "source_dir": {
+            "type": "string",
+            "description": "Local directory containing custom context files. If set, files are read from here instead of the repo."
+          }
+        },
+        "required": [
+          "context_files"
+        ]
+      },
+      "minProperties": 1
+    },
+    "trials": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 1,
+      "description": "Number of trials per (task, condition) pair."
+    },
+    "output_dir": {
+      "type": "string",
+      "default": "out/",
+      "description": "Directory for results artifacts."
+    },
+    "repo": {
+      "type": "object",
+      "description": "Repository to evaluate (URL and optional commit pin).",
+      "properties": {
+        "url": {
+          "type": "string",
+          "description": "Git remote URL."
+        },
+        "commit": {
+          "type": "string",
+          "default": "main",
+          "description": "Branch, tag, or SHA to check out."
+        }
+      },
+      "required": [
+        "url"
+      ],
+      "additionalProperties": false
+    },
+    "driver": {
+      "description": "How the agent is invoked: external command or built-in driver.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "command": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1,
+              "description": "Argv-style command to launch the agent."
+            },
+            "prompt_mode": {
+              "type": "string",
+              "enum": [
+                "arg",
+                "stdin",
+                "env"
+              ],
+              "default": "arg",
+              "description": "How the prompt is delivered: arg (CLI arg), stdin (piped), or env (CRT_PROMPT only)."
+            }
+          },
+          "required": [
+            "command"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "builtin": {
+              "type": "string",
+              "description": "Name of a packaged driver implementation."
+            },
+            "prompt_mode": {
+              "type": "string",
+              "enum": [
+                "arg",
+                "stdin",
+                "env"
+              ],
+              "default": "arg",
+              "description": "How the prompt is delivered: arg (CLI arg), stdin (piped), or env (CRT_PROMPT only)."
+            }
+          },
+          "required": [
+            "builtin"
+          ],
+          "additionalProperties": false
+        }
+      ],
+      "default": {
+        "builtin": "stub"
+      }
+    },
+    "context_patterns": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": [],
+      "description": "Glob patterns for context files considered in analysis."
+    },
+    "on_failure": {
+      "type": "string",
+      "enum": [
+        "continue",
+        "skip_remaining",
+        "rollback_to_last_passing"
+      ],
+      "default": "continue",
+      "description": "Behavior when a step fails in timeline mode."
+    },
+    "prompt_template": {
+      "type": "string",
+      "default": "{prompt}",
+      "description": "Template wrapping each task prompt. Variables: {prompt}, {acceptance_cmd}, {task_id}."
+    }
+  },
+  "additionalProperties": false
+}

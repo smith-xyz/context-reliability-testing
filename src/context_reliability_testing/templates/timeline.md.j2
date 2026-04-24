@@ -1,0 +1,37 @@
+# Timeline Evaluation Report
+
+**Run ID**: {{ run_id }}
+**Repo**: {{ repo_url }}
+**Start commit**: {{ start_commit }}
+**Driver**: {{ driver }}
+**Condition**: {{ condition }}
+**Model**: {{ model }}
+**Generated**: {{ timestamp }}
+
+## Divergence Over Time
+
+| Step | Task | Tests | Files Overlap | Snapshot Delta | Tokens | Time | Marker |
+|------|------|-------|---------------|----------------|--------|------|--------|
+{% for s in steps %}
+| {{ s.step.task_order }} | {{ s.step.task_id }} | {{ "PASS" if s.step.tests_pass else "FAIL" }} | {{ "%.1f" | format(s.step.files_overlap_pct * 100) }}% | {{ s.snapshot.line_delta }} lines | {{ s.step.tokens.total }} | {{ "%.1f" | format(s.step.wall_time_s) }}s | {{ s.step.marker or "—" }} |
+{% endfor %}
+
+## Summary
+
+- **Tasks completed**: {{ steps | length }}
+- **Tests passing at end**: {{ "Yes" if steps[-1].step.tests_pass else "No" }}
+- **Final divergence**: {{ steps[-1].snapshot.line_delta }} lines across {{ steps[-1].snapshot.files_differ }} files
+- **Total tokens**: {{ steps | map(attribute='step.tokens.total') | sum }}
+- **Total time**: {{ "%.1f" | format(steps | map(attribute='step.wall_time_s') | sum) }}s
+
+{% if steps | selectattr('step.marker') | list %}
+## Decision Points
+
+{% for s in steps if s.step.marker %}
+### Step {{ s.step.task_order }}: {{ s.step.task_id }}
+
+**Marker**: {{ s.step.marker }}
+**Divergence at this point**: {{ s.snapshot.line_delta }} lines, {{ s.snapshot.files_differ }} files differ
+**Tests**: {{ "PASS" if s.step.tests_pass else "FAIL" }}
+{% endfor %}
+{% endif %}

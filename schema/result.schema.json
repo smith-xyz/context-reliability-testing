@@ -1,0 +1,76 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "result.schema.json",
+  "title": "RunResult",
+  "description": "Complete results from an evaluation run.",
+  "type": "object",
+  "required": ["run_id", "timestamp", "agent", "trials", "summary"],
+  "properties": {
+    "run_id": {
+      "type": "string",
+      "description": "Unique identifier for this run."
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "agent": {
+      "type": "object",
+      "properties": {
+        "model": { "type": "string" },
+        "temperature": { "type": "number" },
+        "max_steps": { "type": "integer" },
+        "annotations": {
+          "type": "object",
+          "additionalProperties": { "type": "string" },
+          "default": {}
+        }
+      }
+    },
+    "trials": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["task_id", "condition", "trial_number", "passed"],
+        "properties": {
+          "task_id": { "type": "string" },
+          "condition": { "type": "string" },
+          "trial_number": { "type": "integer", "minimum": 1 },
+          "passed": { "type": "boolean" },
+          "tokens": {
+            "type": "object",
+            "properties": {
+              "prompt": { "type": "integer" },
+              "completion": { "type": "integer" }
+            }
+          },
+          "wall_time_s": { "type": "number" },
+          "tool_calls": { "type": "integer" },
+          "error": {
+            "type": "string",
+            "description": "Error message if the trial failed to execute."
+          }
+        }
+      }
+    },
+    "summary": {
+      "type": "object",
+      "description": "Aggregate metrics per condition.",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "pass_rate": { "type": "number" },
+          "total_tasks": { "type": "integer" },
+          "mean_tokens": { "type": "number" },
+          "mean_time_s": { "type": "number" },
+          "mean_tool_calls": { "type": "number" },
+          "pass_rate_stddev": {
+            "type": "number",
+            "description": "Standard deviation of pass rate across trials (when N > 1)."
+          }
+        }
+      }
+    }
+  },
+  "additionalProperties": false
+}

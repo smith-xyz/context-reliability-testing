@@ -1,0 +1,69 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "sequential-task.schema.json",
+  "title": "SequentialTask",
+  "description": "A task in a timeline evaluation sequence.",
+  "type": "object",
+  "required": ["id", "prompt", "task_order", "resolved_commit", "acceptance"],
+  "properties": {
+    "id": {
+      "type": "string",
+      "description": "Unique stable identifier for this task."
+    },
+    "prompt": {
+      "type": "string",
+      "description": "Task description given to the agent."
+    },
+    "task_order": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "resolved_commit": {
+      "type": "string",
+      "description": "Commit SHA the repo was pinned to for this step."
+    },
+    "acceptance": {
+      "type": "object",
+      "description": "How to judge pass/fail.",
+      "required": ["type"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["test_command", "diff_check", "manual"],
+          "description": "Acceptance strategy."
+        },
+        "command": {
+          "type": "string",
+          "description": "Shell command that exits 0 on pass (for test_command type)."
+        },
+        "expected_files": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Files that must exist or match (for diff_check type)."
+        }
+      }
+    },
+    "marker": {
+      "type": "string"
+    },
+    "metadata": {
+      "type": "object",
+      "properties": {
+        "difficulty": {
+          "type": "string",
+          "enum": ["easy", "medium", "hard"]
+        },
+        "category": {
+          "type": "string"
+        },
+        "source": {
+          "type": "string",
+          "description": "Source PR/issue URL."
+        }
+      }
+    }
+  },
+  "additionalProperties": false
+}

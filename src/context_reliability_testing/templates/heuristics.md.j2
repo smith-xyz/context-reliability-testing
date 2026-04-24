@@ -1,0 +1,33 @@
+# Heuristic Rule Classification Report
+
+**Context file**: {{ context_file }}
+**Total rules**: {{ rules | length }}
+**Generated**: {{ timestamp }}
+
+## Classification Summary
+
+| Category | Count | Percentage |
+|----------|-------|------------|
+{% for cat, count in counts.items() %}
+| {{ cat }} | {{ count }} | {{ "%.1f" | format(count / rules | length * 100) }}% |
+{% endfor %}
+
+## Condition Variants Generated
+
+{% for name, content in conditions.items() %}
+### {{ name }}
+
+{% if content %}
+Rules: {{ content.strip().splitlines() | length }}
+{% else %}
+_(empty — baseline)_
+{% endif %}
+{% endfor %}
+
+## All Rules (for review)
+
+| # | Line | Classification | Text |
+|---|------|----------------|------|
+{% for r in rules %}
+| {{ loop.index }} | {{ r.line_number }} | {{ r.classification.value }} | {{ r.text[:80] }}{% if r.text | length > 80 %}...{% endif %} |
+{% endfor %}

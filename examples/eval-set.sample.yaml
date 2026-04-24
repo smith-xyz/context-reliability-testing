@@ -1,0 +1,36 @@
+# Sample eval set — replace with tasks from your repo.
+
+- id: fix-panic-on-nil-config
+  prompt: |
+    The server crashes at startup when config.yaml is missing optional
+    fields. Handle nil values in loadConfig() instead of panicking.
+  acceptance:
+    type: test_command
+    command: go test ./cmd/... -run TestLoadConfig -count=1
+  metadata:
+    difficulty: easy
+    category: bugfix
+
+- id: add-rate-limiting
+  prompt: |
+    The /api/v1/search endpoint has no rate limiting. Add a per-IP
+    token bucket (10 req/s burst, 5 req/s sustained) using the
+    existing middleware chain.
+  acceptance:
+    type: test_command
+    command: go test ./internal/middleware/... -count=1
+    timeout_s: 120
+  metadata:
+    difficulty: medium
+    category: feature
+
+- id: migrate-deprecated-api
+  prompt: |
+    Replace all usage of the deprecated ioutil package with os and io
+    equivalents. The codebase has ~15 call sites across cmd/ and internal/.
+  acceptance:
+    type: test_command
+    command: go vet ./... && go test ./... -count=1
+  metadata:
+    difficulty: easy
+    category: refactor

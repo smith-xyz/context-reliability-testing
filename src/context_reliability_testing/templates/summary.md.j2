@@ -1,0 +1,62 @@
+# Evaluation Summary
+
+**Run ID**: `{{ run_id }}`
+**Timestamp**: {{ timestamp }}
+**Model**: `{{ agent.model }}` (temp={{ agent.temperature }}, max_steps={{ agent.max_steps }})
+
+## Results by condition
+
+| Condition | Pass rate | Tasks | Mean tokens | Mean time (s) | Mean tool calls | Mean cost | Mean turns | Stddev |
+| --------- | --------- | ----- | ----------- | ------------- | --------------- | --------- | ---------- | ------ |
+{% for cond, s in summary | dictsort -%}
+| {{ cond }} | {{ "%.1f%%" | format(s.pass_rate * 100) }} | {{ s.total_tasks }} | {{ "%.0f" | format(s.mean_tokens) }} | {{ "%.2f" | format(s.mean_time_s) }} | {{ "%.1f" | format(s.mean_tool_calls) }} | {{ "$%.4f" | format(s.mean_cost_usd) if s.mean_cost_usd is not none else "—" }} | {{ "%.1f" | format(s.mean_num_turns) if s.mean_num_turns is not none else "—" }} | {{ "%.4f" | format(s.pass_rate_stddev) if s.pass_rate_stddev is not none else "n/a" }} |
+{% endfor %}
+{% if summary | length >= 2 -%}
+{% set best = (summary | dictsort | sort(attribute='1.pass_rate', reverse=true) | first) -%}
+{% set worst = (summary | dictsort | sort(attribute='1.pass_rate') | first) -%}
+## Highlights
+
+- Best condition: **{{ best[0] }}** ({{ "%.1f%%" | format(best[1].pass_rate * 100) }})
+- Worst condition: **{{ worst[0] }}** ({{ "%.1f%%" | format(worst[1].pass_rate * 100) }})
+- Delta: **{{ "%+.1f%%" | format((best[1].pass_rate - worst[1].pass_rate) * 100) }}**
+{% endif %}
+{% if agent.temperature == 0 -%}
+> temperature=0: stddev reflects task variance only.
+{% endif %}
+{% if context_analysis %}
+## Context file analysis
+
+Scanned: {{ context_analysis.files | join(", ") }} — {{ context_analysis.total }} rules detected.
+
+| Category | Count |
+| -------- | ----- |
+| Negative constraints | {{ context_analysis.negative }} |
+| Positive directives | {{ context_analysis.positive }} |
+| Informational | {{ context_analysis.informational }} |
+
+{% if context_analysis.negative == 0 and context_analysis.positive == 0 -%}
+All rules classified as informational.
+{% elif context_analysis.negative > context_analysis.positive -%}
+Constraint-heavy: {{ context_analysis.negative }} negative vs {{ context_analysis.positive }} positive.
+{% elif context_analysis.positive > context_analysis.negative -%}
+Directive-heavy: {{ context_analysis.positive }} positive vs {{ context_analysis.negative }} negative.
+{% endif -%}
+> Classification uses regex pattern matching — review manually.
+{% endif %}
+
+{% if assertion_summary %}
+## Assertion results
+
+| Assertion | {% for c in conditions %}{{ c }} | {% endfor %}
+| --------- | {% for c in conditions %}--- | {% endfor %}
+{% for row in assertion_summary -%}
+| {{ row.name }} | {% for c in conditions %}{{ row.conditions[c].passed }}/{{ row.conditions[c].total }} ({{ row.conditions[c].pct }}) | {% endfor %}
+{% endfor %}
+{% endif %}
+## Per-trial details
+
+| Task | Condition | Trial | Passed | Tokens | Time (s) | Tool calls | Cost | Turns |
+| ---- | --------- | ----- | ------ | ------ | -------- | ---------- | ---- | ----- |
+{% for t in trials -%}
+| {{ t.task_id }} | {{ t.condition }} | {{ t.trial_number }} | {{ "PASS" if t.passed else "FAIL" }} | {{ t.tokens.total if t.tokens else "—" }} | {{ "%.2f" | format(t.wall_time_s) if t.wall_time_s is not none else "—" }} | {{ t.tool_calls if t.tool_calls is not none else "—" }} | {{ "$%.4f" | format(t.cost_usd) if t.cost_usd is not none else "—" }} | {{ t.num_turns if t.num_turns is not none else "—" }} |
+{% endfor %}

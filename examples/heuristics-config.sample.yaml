@@ -1,0 +1,49 @@
+# Heuristics classifier configuration.
+#
+# Copy this file into your project and reference it in your run config:
+#   heuristics_config: heuristics.yaml
+#
+# CRT will classify rules in your context files as negative/positive/informational
+# and include a breakdown in SUMMARY.md.
+#
+# Patterns are case-insensitive regexes; keywords are plain substring matches.
+# A rule matches if ANY pattern OR keyword hits. Negative is checked first —
+# "should not" classifies as negative even though "should" is a positive pattern.
+
+classifiers:
+  negative:
+    patterns:
+      - "\\bdo\\s+not\\b"
+      - "\\bdon['\u2019]t\\b"
+      - "\\bnever\\b"
+      - "\\bavoid\\b"
+      - "\\bmust\\s+not\\b"
+      - "\\bshall\\s+not\\b"
+      - "\\bshould\\s+not\\b"
+      - "\\bshouldn['\u2019]t\\b"
+      - "\\bcannot\\b"
+      - "\\bcan['\u2019]t\\b"
+      - "\\bwon['\u2019]t\\b"
+      - "\\brefrain\\b"
+      - "\\bprohibit\\b"
+      - "\\bforbid\\b"
+      - "\\bdisallow\\b"
+      - "\\brestrict\\b"
+      - "\\bprevent\\b"
+      - "\\bmay\\s+not\\b"
+    keywords: []
+
+  positive:
+    patterns:
+      - "\\balways\\b"
+      - "\\bensure\\b"
+      - "\\bprefer\\b"
+      - "\\bmake\\s+sure\\b"
+      - "\\bshould\\b(?!\\s+not\\b)"
+      - "\\bmust\\b(?!\\s+not\\b)"
+      - "\\bshall\\b(?!\\s+not\\b)"
+      - "\\brequired\\b"
+    # Add domain-specific keywords your team uses as directives:
+    keywords:
+      # - "follow"
+      # - "use"

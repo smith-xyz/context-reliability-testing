@@ -1,0 +1,17 @@
+# Custom script driver.
+#
+# SECURITY: Your script runs with full access to the worktree and your
+# environment.  Review what it does before pointing CRT at it.
+#
+# The script receives the prompt via $CRT_PROMPT env var.
+# Additional env vars available: CRT_WORKSPACE, CRT_MODEL, CRT_MAX_TURNS.
+#
+# Optionally write token metrics to $CRT_RESULT_FILE (JSON):
+#   {"tokens_prompt": 1000, "tokens_completion": 500, "tool_calls": 12, "error": null}
+#
+# If no sidecar file is written, CRT still records wall time and checks
+# acceptance criteria — token/tool_call metrics are reported as 0.
+
+driver:
+  command: ["./my-agent.sh"]
+  prompt_mode: env
