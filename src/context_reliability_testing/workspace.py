@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import shutil
 import subprocess
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -43,12 +44,15 @@ class WorkspaceManager:
     def clone(self) -> None:
         self.base_dir.mkdir(parents=True, exist_ok=True)
         if self._clone_dir.exists():
-            raise WorkspaceError(f"clone destination already exists: {self._clone_dir}")
-        self.git(["clone", "--bare", self.repo_url, str(self._clone_dir)])
-        self.git(
-            ["remote", "set-url", "--push", "origin", "PUSH_DISABLED_BY_CRT"],
-            cwd=self._clone_dir,
-        )
+            logger.info("reusing existing clone: %s", self._clone_dir)
+            self._cleanup_stale_worktrees()
+            self.git(["fetch", "origin"], cwd=self._clone_dir)
+        else:
+            self.git(["clone", "--bare", self.repo_url, str(self._clone_dir)])
+            self.git(
+                ["remote", "set-url", "--push", "origin", "PUSH_DISABLED_BY_CRT"],
+                cwd=self._clone_dir,
+            )
         if self.pin_commit is not None:
             spec = f"{self.pin_commit}^{{commit}}"
             try:
@@ -58,12 +62,21 @@ class WorkspaceManager:
                     f"pin_commit not found in repository: {self.pin_commit}"
                 ) from e
 
+    def _cleanup_stale_worktrees(self) -> None:
+        self.git(["worktree", "prune"], cwd=self._clone_dir)
+        for child in self.base_dir.iterdir():
+            if child == self._clone_dir or child.name.startswith("."):
+                continue
+            logger.info("removing stale worktree dir: %s", child.name)
+            shutil.rmtree(child, ignore_errors=True)
+
     def create_worktree(
         self, name: str, commit: str | None = None, persistent: bool = False
     ) -> Path:
         target = commit or self.pin_commit or "HEAD"
-        path = self.base_dir / name
-        self.git(["worktree", "add", str(path), target], cwd=self._clone_dir)
+        ts = int(time.time())
+        path = self.base_dir / f"{name}-{ts}"
+        self.git(["worktree", "add", "--detach", str(path), target], cwd=self._clone_dir)
         if not persistent:
             self._worktrees.append(path)
         logger.debug("worktree created: %s at %s", name, path)

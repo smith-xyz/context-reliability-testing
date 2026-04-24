@@ -110,7 +110,8 @@ class TestTrialBundle:
 
     def test_artifact_dir_path(self, tmp_path: Path) -> None:
         bundle = self._make(tmp_path)
-        assert bundle.artifact_dir == tmp_path / "out" / "artifacts" / "my-task-no_context-1"
+        assert bundle.artifact_dir.parent == (tmp_path / "out" / "artifacts").resolve()
+        assert bundle.artifact_dir.name.startswith("my-task-no_context-1-")
 
     def test_write_creates_directory(self, tmp_path: Path) -> None:
         bundle = self._make(tmp_path)

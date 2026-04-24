@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import subprocess
+import time
 from pathlib import Path
 
 from .trial_context import TrialContext
@@ -26,7 +27,10 @@ class TrialBundle:
         passed: bool,
         exclude_patterns: list[str] | None = None,
     ) -> None:
-        self._artifact_dir = output_dir / "artifacts" / f"{task_id}-{condition}-{trial_number}"
+        ts = int(time.time())
+        self._artifact_dir = (
+            output_dir / "artifacts" / f"{task_id}-{condition}-{trial_number}-{ts}"
+        ).resolve()
         self._task_id = task_id
         self._condition = condition
         self._trial_number = trial_number
