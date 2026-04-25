@@ -8,6 +8,7 @@ import subprocess
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from uuid import uuid4
 
 from .models import Acceptance, AcceptanceType, SequentialTask
 
@@ -70,12 +71,15 @@ class WorkspaceManager:
             logger.info("removing stale worktree dir: %s", child.name)
             shutil.rmtree(child, ignore_errors=True)
 
+    @staticmethod
+    def _worktree_dirname(name: str) -> str:
+        return f"{name}-{int(time.time())}-{uuid4().hex[:8]}"
+
     def create_worktree(
         self, name: str, commit: str | None = None, persistent: bool = False
     ) -> Path:
         target = commit or self.pin_commit or "HEAD"
-        ts = int(time.time())
-        path = self.base_dir / f"{name}-{ts}"
+        path = self.base_dir / self._worktree_dirname(name)
         self.git(["worktree", "add", "--detach", str(path), target], cwd=self._clone_dir)
         if not persistent:
             self._worktrees.append(path)

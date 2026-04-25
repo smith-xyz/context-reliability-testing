@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import time
 
 from rich.console import Console, ConsoleOptions, RenderResult
@@ -110,6 +111,7 @@ def run_streaming(
     runner: EvalRunner,
     console: Console,
     total: int,
+    parallel: int = 1,
 ) -> list[TrialResult]:
     """Run trials with inline streaming output (agent stdout visible)."""
     count = 0
@@ -145,13 +147,14 @@ def run_streaming(
             console.rule(f"[bold]{phase}[/bold]")
 
     runner.on_progress = on_progress
-    return runner.run()
+    return asyncio.run(runner.arun(parallel=parallel))
 
 
 def run_headless(
     runner: EvalRunner,
     console: Console,
     total: int,
+    parallel: int = 1,
 ) -> list[TrialResult]:
     """Run trials with a live-updating Rich table (no agent stdout)."""
     progress = ProgressDisplay(total)
@@ -164,4 +167,4 @@ def run_headless(
 
     runner.on_progress = on_progress
     with Live(progress, console=console, refresh_per_second=2):
-        return runner.run()
+        return asyncio.run(runner.arun(parallel=parallel))

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import json
 import logging
@@ -36,6 +37,10 @@ class SubprocessDriver:
         self.prompt_mode = prompt_mode
         self.timeout = timeout
         self.stream = stream
+
+    @property
+    def supports_parallel(self) -> bool:
+        return not self.stream
 
     def execute(self, prompt: str, workspace: Path, model: str, max_turns: int) -> DriverResult:
         result_file = workspace / ".crt-result.json"
@@ -194,6 +199,73 @@ class SubprocessDriver:
             raw_output=raw_output,
             error=data.get("error"),
         )
+
+    async def execute_async(
+        self, prompt: str, workspace: Path, model: str, max_turns: int
+    ) -> DriverResult:
+        result_file = workspace / ".crt-result.json"
+        env = {
+            **os.environ,
+            "CRT_WORKSPACE": str(workspace),
+            "CRT_MODEL": model,
+            "CRT_MAX_TURNS": str(max_turns),
+            "CRT_PROMPT": prompt,
+            "CRT_RESULT_FILE": str(result_file),
+        }
+        cmd = list(self.command)
+        stdin_input: str | None = None
+        if self.prompt_mode == PromptMode.ARG:
+            cmd.append(prompt)
+        elif self.prompt_mode == PromptMode.STDIN:
+            stdin_input = prompt
+
+        start = time.monotonic()
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                env=env,
+                cwd=workspace,
+                stdin=asyncio.subprocess.PIPE if stdin_input is not None else None,
+                stdout=asyncio.subprocess.PIPE if not self.stream else None,
+                stderr=asyncio.subprocess.PIPE if not self.stream else None,
+            )
+        except OSError as exc:
+            return self._fail(time.monotonic() - start, f"infrastructure: {exc}")
+
+        try:
+            stdout_bytes, stderr_bytes = await asyncio.wait_for(
+                proc.communicate(input=stdin_input.encode() if stdin_input else None),
+                timeout=self.timeout,
+            )
+        except TimeoutError:
+            proc.kill()
+            await proc.wait()
+            return self._fail(
+                time.monotonic() - start, f"agent timed out after {self.timeout}s"
+            )
+
+        wall_time = time.monotonic() - start
+        if proc.returncode != 0:
+            raw = (stdout_bytes or b"").decode() + (stderr_bytes or b"").decode()
+            return self._fail(wall_time, f"agent exited {proc.returncode}", raw)
+
+        raw_output = (stdout_bytes or b"").decode() + (stderr_bytes or b"").decode()
+        if not self.stream and raw_output:
+            metrics = extract_metrics(raw_output)
+            if metrics:
+                return DriverResult(
+                    tokens=TokenUsage(
+                        prompt=metrics.tokens_prompt,
+                        completion=metrics.tokens_completion,
+                    ),
+                    tool_calls=metrics.tool_calls,
+                    wall_time_s=wall_time,
+                    raw_output=raw_output,
+                    cost_usd=metrics.cost_usd,
+                    num_turns=metrics.num_turns,
+                )
+
+        return self._build_result(result_file, raw_output, wall_time)
 
     @staticmethod
     def _fail(wall_time: float, error: str | None, raw_output: str = "") -> DriverResult:

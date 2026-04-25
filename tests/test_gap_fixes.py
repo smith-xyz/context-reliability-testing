@@ -11,6 +11,7 @@ import pytest
 
 from context_reliability_testing.acceptance import AcceptanceChecker
 from context_reliability_testing.drivers.stub import StubDriver
+from context_reliability_testing.executor import TrialExecutor
 from context_reliability_testing.models import (
     Acceptance,
     AcceptanceType,
@@ -214,16 +215,18 @@ class TestPreflight:
         ]
         ws = WorkspaceManager(str(origin), tmp_path / "ws")
         ws.clone()
-        return EvalRunner(
-            config=cfg,
-            tasks=tasks,
-            driver=StubDriver(seed=1, pass_rate=pass_rate),
+        executor = TrialExecutor(
             workspace=ws,
+            driver=StubDriver(seed=1, pass_rate=pass_rate),
+            checker=AcceptanceChecker(),
+            assertion_runner=None,
+            config=cfg,
         )
+        return EvalRunner(config=cfg, tasks=tasks, executor=executor)
 
     def test_preflight_passes_on_good_repo(self, tmp_path: Path) -> None:
         runner = self._make_runner(tmp_path, "true")
-        ws = runner.workspace
+        ws = runner._workspace
         assert ws is not None
         wt = ws.create_worktree("preflight")
         try:
@@ -235,7 +238,7 @@ class TestPreflight:
 
     def test_preflight_raises_on_broken_repo(self, tmp_path: Path) -> None:
         runner = self._make_runner(tmp_path, "false")
-        ws = runner.workspace
+        ws = runner._workspace
         assert ws is not None
         wt = ws.create_worktree("preflight")
         try:
@@ -250,7 +253,7 @@ class TestPreflight:
         runner = self._make_runner(tmp_path, "false")
         with pytest.raises(PreflightError):
             runner.run()
-        runner.workspace.teardown()  # type: ignore[union-attr]
+        runner._workspace.teardown()  # type: ignore[union-attr]
 
     def test_preflight_deduplicates_same_command(self, tmp_path: Path) -> None:
         origin = tmp_path / "origin"
@@ -276,7 +279,14 @@ class TestPreflight:
         ]
         ws = WorkspaceManager(str(origin), tmp_path / "ws")
         ws.clone()
-        runner = EvalRunner(config=cfg, tasks=tasks, driver=StubDriver(seed=1), workspace=ws)
+        executor = TrialExecutor(
+            workspace=ws,
+            driver=StubDriver(seed=1),
+            checker=AcceptanceChecker(),
+            assertion_runner=None,
+            config=cfg,
+        )
+        runner = EvalRunner(config=cfg, tasks=tasks, executor=executor)
         phases: list[str] = []
         runner.on_progress = lambda phase, _r: phases.append(phase)
         wt = ws.create_worktree("preflight")
@@ -308,7 +318,14 @@ class TestPreflight:
         ]
         ws = WorkspaceManager(str(origin), tmp_path / "ws")
         ws.clone()
-        runner = EvalRunner(config=cfg, tasks=tasks, driver=StubDriver(seed=1), workspace=ws)
+        executor = TrialExecutor(
+            workspace=ws,
+            driver=StubDriver(seed=1),
+            checker=AcceptanceChecker(),
+            assertion_runner=None,
+            config=cfg,
+        )
+        runner = EvalRunner(config=cfg, tasks=tasks, executor=executor)
         wt = ws.create_worktree("preflight")
         try:
             runner._preflight_done = {}

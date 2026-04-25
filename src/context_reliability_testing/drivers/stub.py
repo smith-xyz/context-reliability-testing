@@ -14,6 +14,10 @@ class StubDriver:
         self._rng = random.Random(seed)
         self._pass_rate = pass_rate
 
+    @property
+    def supports_parallel(self) -> bool:
+        return True
+
     def execute(self, prompt: str, workspace: Path, model: str, max_turns: int) -> DriverResult:
         passed = self._rng.random() < self._pass_rate
         return DriverResult(
@@ -26,3 +30,8 @@ class StubDriver:
             raw_output="",
             error=None if passed else "agent: stub failure",
         )
+
+    async def execute_async(
+        self, prompt: str, workspace: Path, model: str, max_turns: int
+    ) -> DriverResult:
+        return self.execute(prompt, workspace, model, max_turns)

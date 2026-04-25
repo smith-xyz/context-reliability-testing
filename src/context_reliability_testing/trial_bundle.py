@@ -7,6 +7,7 @@ import logging
 import subprocess
 import time
 from pathlib import Path
+from uuid import uuid4
 
 from .trial_context import TrialContext
 
@@ -28,8 +29,9 @@ class TrialBundle:
         exclude_patterns: list[str] | None = None,
     ) -> None:
         ts = int(time.time())
+        uid = uuid4().hex[:8]
         self._artifact_dir = (
-            output_dir / "artifacts" / f"{task_id}-{condition}-{trial_number}-{ts}"
+            output_dir / "artifacts" / f"{task_id}-{condition}-{trial_number}-{ts}-{uid}"
         ).resolve()
         self._task_id = task_id
         self._condition = condition
@@ -62,6 +64,9 @@ class TrialBundle:
             logger.warning("git not available for diff capture")
             return
 
+        self._parse_changed_files()
+
+    def _parse_changed_files(self) -> None:
         self._changed_files = list(
             {
                 line.split(" b/")[-1]

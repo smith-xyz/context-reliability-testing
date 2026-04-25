@@ -15,6 +15,7 @@ from .acceptance import AcceptanceChecker
 from .assertions import AssertionRunner
 from .drivers import make_driver
 from .drivers.stub import StubDriver
+from .executor import TrialExecutor
 from .init import scaffold
 from .models import (
     RunConfig,
@@ -138,6 +139,14 @@ def run(
         "--keep-worktrees/--cleanup",
         help="Keep trial worktrees for inspection (default) or clean up after run.",
     ),
+    parallel: int = typer.Option(
+        1,
+        "--parallel",
+        "-p",
+        min=1,
+        max=32,
+        help="Max concurrent agent invocations (1=serial, max 32).",
+    ),
 ) -> None:
     """Run tasks under different context conditions and measure results."""
     run_cfg = RunConfig.model_validate(yaml.safe_load(config.read_text()))
@@ -153,6 +162,11 @@ def run(
     )
 
     if is_timeline:
+        if parallel > 1:
+            console.print(
+                "[yellow]Warning:[/yellow] --parallel is ignored for timeline mode "
+                "(steps are order-dependent)."
+            )
         _run_timeline(run_cfg, resolved, mode, out_dir, stream, console, dry_run)  # type: ignore[arg-type]
     else:
         _run_eval(  # type: ignore[arg-type]
@@ -165,6 +179,7 @@ def run(
             dry_run,
             headless,
             keep_worktrees,
+            parallel,
         )
 
 
@@ -183,6 +198,7 @@ def _run_eval(
     dry_run: bool,
     headless: bool,
     keep_worktrees: bool = True,
+    parallel: int = 1,
 ) -> None:
     total = len(eval_tasks) * len(run_cfg.conditions) * run_cfg.trials
     console.print(
@@ -209,20 +225,24 @@ def _run_eval(
     has_assertions = any(t.assertions for t in eval_tasks)
     assertion_runner = AssertionRunner() if has_assertions else None
 
+    executor = TrialExecutor(
+        workspace=workspace,
+        driver=driver,
+        checker=checker,
+        assertion_runner=assertion_runner,
+        config=run_cfg,
+        keep_worktrees=keep_worktrees,
+    )
     runner = EvalRunner(
         config=run_cfg,
         tasks=eval_tasks,
-        driver=driver,
-        workspace=workspace,
-        checker=checker,
-        assertion_runner=assertion_runner,
-        keep_worktrees=keep_worktrees,
+        executor=executor,
     )
     try:
         if headless:
-            trials = run_headless(runner, console, total)
+            trials = run_headless(runner, console, total, parallel=parallel)
         else:
-            trials = run_streaming(runner, console, total)
+            trials = run_streaming(runner, console, total, parallel=parallel)
     except PreflightError as exc:
         console.print(f"[red]Error:[/red] {exc}")
         raise typer.Exit(code=1) from None
