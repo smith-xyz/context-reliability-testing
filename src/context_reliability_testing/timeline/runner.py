@@ -13,6 +13,7 @@ from ..drivers.base import DriverResult
 from ..errors import PreflightError
 from ..evaluation.acceptance import AcceptanceChecker
 from ..models import (
+    AcceptanceType,
     Condition,
     EvalTask,
     FailurePolicy,
@@ -53,6 +54,8 @@ class TimelineRunner:
         if not repo:
             raise ValueError("timeline requires 'repo' in run config")
         first = self.tasks[0]
+        if first.acceptance.type == AcceptanceType.MANUAL:
+            return
         ws = WorkspaceManager(repo.url, out_dir / ".workspace" / "_preflight", repo.commit)
         ws.clone()
         wt = ws.create_worktree("preflight")

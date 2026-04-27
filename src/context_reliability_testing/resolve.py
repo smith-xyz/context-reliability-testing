@@ -39,7 +39,7 @@ def derive_tasks(
 ) -> list[SequentialTask]:
     """Build SequentialTask list from git log over a commit range."""
     if acceptance is None:
-        acceptance = Acceptance(type=AcceptanceType.TEST_COMMAND, command="make test")
+        acceptance = Acceptance(type=AcceptanceType.MANUAL)
     fmt = f"%H%x00%s%x00%b{_RECORD_SEP}"
     out = ws.git(["log", "--reverse", f"--format={fmt}", range_spec], cwd=ws.clone_dir)
     tasks: list[SequentialTask] = []
