@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import dataclasses
 import re
 from dataclasses import dataclass
 from functools import cached_property
 from pathlib import Path
+from typing import Any
+
+_PATH_FIELDS = frozenset({"artifact_dir", "worktree"})
 
 
 @dataclass(frozen=True)
@@ -20,6 +24,13 @@ class TrialContext:
     condition: str
     trial_number: int
     passed: bool
+
+    def to_dict(self) -> dict[str, Any]:
+        return {k: str(v) if k in _PATH_FIELDS else v for k, v in dataclasses.asdict(self).items()}
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> TrialContext:
+        return cls(**{k: Path(v) if k in _PATH_FIELDS else v for k, v in data.items()})
 
     @cached_property
     def added_lines(self) -> list[str]:

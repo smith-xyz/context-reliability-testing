@@ -7,18 +7,29 @@ import logging
 import os
 import subprocess
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
 from ..models import PromptMode, TokenUsage
 from .adapters import extract_metrics
-from .base import DriverResult
+from .base import Driver, DriverResult
 
 logger = logging.getLogger(__name__)
 
 _DEFAULT_TIMEOUT = 1800  # 30 min
 
 
-class SubprocessDriver:
+@dataclass(frozen=True)
+class _RawCompletion:
+    """Intermediate result from a subprocess call before finalization."""
+
+    output: str
+    wall_time: float
+    returncode: int | None
+    error: str | None = None
+
+
+class SubprocessDriver(Driver):
     """Runs any CLI agent via subprocess.
 
     Two modes:
@@ -42,39 +53,38 @@ class SubprocessDriver:
     def supports_parallel(self) -> bool:
         return not self.stream
 
-    def execute(self, prompt: str, workspace: Path, model: str, max_turns: int) -> DriverResult:
-        result_file = workspace / ".crt-result.json"
-        env = {
+    def _build_env(
+        self, prompt: str, workspace: Path, model: str, max_turns: int
+    ) -> dict[str, str]:
+        return {
             **os.environ,
             "CRT_WORKSPACE": str(workspace),
             "CRT_MODEL": model,
             "CRT_MAX_TURNS": str(max_turns),
             "CRT_PROMPT": prompt,
-            "CRT_RESULT_FILE": str(result_file),
+            "CRT_RESULT_FILE": str(workspace / ".crt-result.json"),
         }
 
+    def _resolve_cmd(self, prompt: str) -> tuple[list[str], str | None]:
         cmd = list(self.command)
         stdin_input: str | None = None
         if self.prompt_mode == PromptMode.ARG:
             cmd.append(prompt)
         elif self.prompt_mode == PromptMode.STDIN:
             stdin_input = prompt
+        return cmd, stdin_input
 
-        start = time.monotonic()
-        if self.stream:
-            raw_output, wall_time, error = self._run_passthrough(
-                cmd, stdin_input, env, workspace, start
-            )
-        else:
-            raw_output, wall_time, error = self._run_captured(
-                cmd, stdin_input, env, workspace, start
-            )
+    def _to_result(self, completion: _RawCompletion, result_file: Path) -> DriverResult:
+        """Single finalization path shared by sync and async execution."""
+        if completion.error:
+            return self._fail(completion.wall_time, completion.error, completion.output)
 
+        error = f"agent exited {completion.returncode}" if completion.returncode != 0 else None
         if error:
-            return self._fail(wall_time, error, raw_output)
+            return self._fail(completion.wall_time, error, completion.output)
 
-        if not self.stream and raw_output:
-            metrics = extract_metrics(raw_output)
+        if not self.stream and completion.output:
+            metrics = extract_metrics(completion.output)
             if metrics:
                 return DriverResult(
                     tokens=TokenUsage(
@@ -82,13 +92,27 @@ class SubprocessDriver:
                         completion=metrics.tokens_completion,
                     ),
                     tool_calls=metrics.tool_calls,
-                    wall_time_s=wall_time,
-                    raw_output=raw_output,
+                    wall_time_s=completion.wall_time,
+                    raw_output=completion.output,
                     cost_usd=metrics.cost_usd,
                     num_turns=metrics.num_turns,
                 )
+        return self._build_result(result_file, completion.output, completion.wall_time)
 
-        return self._build_result(result_file, raw_output, wall_time)
+    # ----- Sync execution -----
+
+    def execute(self, prompt: str, workspace: Path, model: str, max_turns: int) -> DriverResult:
+        result_file = workspace / ".crt-result.json"
+        env = self._build_env(prompt, workspace, model, max_turns)
+        cmd, stdin_input = self._resolve_cmd(prompt)
+
+        start = time.monotonic()
+        if self.stream:
+            completion = self._run_passthrough(cmd, stdin_input, env, workspace, start)
+        else:
+            completion = self._run_captured(cmd, stdin_input, env, workspace, start)
+
+        return self._to_result(completion, result_file)
 
     def _run_passthrough(
         self,
@@ -97,8 +121,7 @@ class SubprocessDriver:
         env: dict[str, str],
         cwd: Path,
         start: float,
-    ) -> tuple[str, float, str | None]:
-        """Agent renders directly to terminal. No stdout capture."""
+    ) -> _RawCompletion:
         try:
             proc = subprocess.Popen(
                 cmd,
@@ -108,7 +131,7 @@ class SubprocessDriver:
                 stdin=subprocess.PIPE if stdin_input is not None else None,
             )
         except OSError as exc:
-            return "", time.monotonic() - start, f"infrastructure: {exc}"
+            return _RawCompletion("", time.monotonic() - start, None, f"infrastructure: {exc}")
 
         if stdin_input is not None and proc.stdin:
             with contextlib.suppress(OSError):
@@ -120,15 +143,11 @@ class SubprocessDriver:
         except subprocess.TimeoutExpired:
             proc.kill()
             proc.wait()
-            return (
-                "",
-                time.monotonic() - start,
-                f"agent timed out after {self.timeout}s",
+            return _RawCompletion(
+                "", time.monotonic() - start, None, f"agent timed out after {self.timeout}s"
             )
 
-        wall_time = time.monotonic() - start
-        error = f"agent exited {proc.returncode}" if proc.returncode != 0 else None
-        return "", wall_time, error
+        return _RawCompletion("", time.monotonic() - start, proc.returncode)
 
     def _run_captured(
         self,
@@ -137,8 +156,7 @@ class SubprocessDriver:
         env: dict[str, str],
         cwd: Path,
         start: float,
-    ) -> tuple[str, float, str | None]:
-        """Capture all output for headless/programmatic use."""
+    ) -> _RawCompletion:
         try:
             proc = subprocess.run(
                 cmd,
@@ -149,18 +167,54 @@ class SubprocessDriver:
                 text=True,
                 timeout=self.timeout,
             )
-            wall_time = time.monotonic() - start
         except subprocess.TimeoutExpired:
-            return (
-                "",
-                time.monotonic() - start,
-                f"agent timed out after {self.timeout}s",
+            return _RawCompletion(
+                "", time.monotonic() - start, None, f"agent timed out after {self.timeout}s"
             )
         except OSError as exc:
-            return "", time.monotonic() - start, f"infrastructure: {exc}"
-        raw = proc.stdout + proc.stderr
-        error = f"agent exited {proc.returncode}" if proc.returncode != 0 else None
-        return raw, wall_time, error
+            return _RawCompletion("", time.monotonic() - start, None, f"infrastructure: {exc}")
+        return _RawCompletion(proc.stdout + proc.stderr, time.monotonic() - start, proc.returncode)
+
+    # ----- Async execution -----
+    # Uses native asyncio.create_subprocess_exec to avoid consuming ThreadPoolExecutor
+    # slots (default=8), which matters at high parallelism (up to 32 concurrent trials).
+    # Shares env/cmd setup and finalization with the sync path above.
+
+    async def execute_async(
+        self, prompt: str, workspace: Path, model: str, max_turns: int
+    ) -> DriverResult:
+        result_file = workspace / ".crt-result.json"
+        env = self._build_env(prompt, workspace, model, max_turns)
+        cmd, stdin_input = self._resolve_cmd(prompt)
+
+        start = time.monotonic()
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                env=env,
+                cwd=workspace,
+                stdin=asyncio.subprocess.PIPE if stdin_input is not None else None,
+                stdout=asyncio.subprocess.PIPE if not self.stream else None,
+                stderr=asyncio.subprocess.PIPE if not self.stream else None,
+            )
+        except OSError as exc:
+            return self._fail(time.monotonic() - start, f"infrastructure: {exc}")
+
+        try:
+            stdout_bytes, stderr_bytes = await asyncio.wait_for(
+                proc.communicate(input=stdin_input.encode() if stdin_input else None),
+                timeout=self.timeout,
+            )
+        except TimeoutError:
+            proc.kill()
+            await proc.wait()
+            return self._fail(time.monotonic() - start, f"agent timed out after {self.timeout}s")
+
+        raw_output = (stdout_bytes or b"").decode() + (stderr_bytes or b"").decode()
+        completion = _RawCompletion(raw_output, time.monotonic() - start, proc.returncode)
+        return self._to_result(completion, result_file)
+
+    # ----- Shared helpers -----
 
     def _build_result(
         self,
@@ -199,73 +253,6 @@ class SubprocessDriver:
             raw_output=raw_output,
             error=data.get("error"),
         )
-
-    async def execute_async(
-        self, prompt: str, workspace: Path, model: str, max_turns: int
-    ) -> DriverResult:
-        result_file = workspace / ".crt-result.json"
-        env = {
-            **os.environ,
-            "CRT_WORKSPACE": str(workspace),
-            "CRT_MODEL": model,
-            "CRT_MAX_TURNS": str(max_turns),
-            "CRT_PROMPT": prompt,
-            "CRT_RESULT_FILE": str(result_file),
-        }
-        cmd = list(self.command)
-        stdin_input: str | None = None
-        if self.prompt_mode == PromptMode.ARG:
-            cmd.append(prompt)
-        elif self.prompt_mode == PromptMode.STDIN:
-            stdin_input = prompt
-
-        start = time.monotonic()
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                *cmd,
-                env=env,
-                cwd=workspace,
-                stdin=asyncio.subprocess.PIPE if stdin_input is not None else None,
-                stdout=asyncio.subprocess.PIPE if not self.stream else None,
-                stderr=asyncio.subprocess.PIPE if not self.stream else None,
-            )
-        except OSError as exc:
-            return self._fail(time.monotonic() - start, f"infrastructure: {exc}")
-
-        try:
-            stdout_bytes, stderr_bytes = await asyncio.wait_for(
-                proc.communicate(input=stdin_input.encode() if stdin_input else None),
-                timeout=self.timeout,
-            )
-        except TimeoutError:
-            proc.kill()
-            await proc.wait()
-            return self._fail(
-                time.monotonic() - start, f"agent timed out after {self.timeout}s"
-            )
-
-        wall_time = time.monotonic() - start
-        if proc.returncode != 0:
-            raw = (stdout_bytes or b"").decode() + (stderr_bytes or b"").decode()
-            return self._fail(wall_time, f"agent exited {proc.returncode}", raw)
-
-        raw_output = (stdout_bytes or b"").decode() + (stderr_bytes or b"").decode()
-        if not self.stream and raw_output:
-            metrics = extract_metrics(raw_output)
-            if metrics:
-                return DriverResult(
-                    tokens=TokenUsage(
-                        prompt=metrics.tokens_prompt,
-                        completion=metrics.tokens_completion,
-                    ),
-                    tool_calls=metrics.tool_calls,
-                    wall_time_s=wall_time,
-                    raw_output=raw_output,
-                    cost_usd=metrics.cost_usd,
-                    num_turns=metrics.num_turns,
-                )
-
-        return self._build_result(result_file, raw_output, wall_time)
 
     @staticmethod
     def _fail(wall_time: float, error: str | None, raw_output: str = "") -> DriverResult:

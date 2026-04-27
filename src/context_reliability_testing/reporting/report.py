@@ -9,12 +9,12 @@ from pathlib import Path
 
 from jinja2 import Environment, FileSystemLoader
 
-from .models import RunResult, TrialResult
+from ..models import RunResult, TrialResult
 
 logger = logging.getLogger(__name__)
 
 _env = Environment(
-    loader=FileSystemLoader(Path(__file__).parent / "templates"),
+    loader=FileSystemLoader(Path(__file__).resolve().parent.parent / "templates"),
     keep_trailing_newline=True,
     trim_blocks=True,
     lstrip_blocks=True,

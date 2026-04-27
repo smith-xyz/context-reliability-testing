@@ -3,45 +3,19 @@
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime
 from pathlib import Path
 
 import typer
 import yaml
-from jinja2 import Environment, FileSystemLoader
 from rich.console import Console
 
-from .acceptance import AcceptanceChecker
-from .assertions import AssertionRunner
-from .drivers import make_driver
-from .drivers.stub import StubDriver
-from .executor import TrialExecutor
-from .init import scaffold
-from .models import (
-    RunConfig,
-    RunResult,
-    SequentialTask,
-    TimelineMode,
-)
-from .progress import run_headless, run_streaming
-from .report import write_result_json, write_summary_md
-from .resolve import collect_context_paths, resolve_tasks
-from .runner import EvalRunner, PreflightError
-from .timeline import TimelineRunner
-from .workspace import WorkspaceManager
+from ._commands import RunOptions, run_eval, run_timeline
+from .errors import ConfigError
+from .models import RunConfig, RunResult, TimelineMode
+from .resolve import ResolvedEval, ResolvedTimeline, resolve_tasks
+from .scaffold import scaffold
 
 app = typer.Typer(help="context-reliability-testing: A/B test coding-agent context stacks.")
-
-_TEMPLATES = Path(__file__).parent / "templates"
-
-
-def _jinja_env() -> Environment:
-    return Environment(
-        loader=FileSystemLoader(_TEMPLATES),
-        keep_trailing_newline=True,
-        trim_blocks=True,
-        lstrip_blocks=True,
-    )
 
 
 @app.callback()
@@ -154,190 +128,35 @@ def run(
     run_cfg.output_dir = out_dir
     console = Console()
 
-    headless = not stream
-    resolved = resolve_tasks(tasks, commit_range, acceptance_cmd, run_cfg, out_dir, console)
-
-    is_timeline = (
-        isinstance(resolved, list) and resolved and isinstance(resolved[0], SequentialTask)
-    )
-
-    if is_timeline:
-        if parallel > 1:
-            console.print(
-                "[yellow]Warning:[/yellow] --parallel is ignored for timeline mode "
-                "(steps are order-dependent)."
-            )
-        _run_timeline(run_cfg, resolved, mode, out_dir, stream, console, dry_run)  # type: ignore[arg-type]
-    else:
-        _run_eval(  # type: ignore[arg-type]
-            run_cfg,
-            resolved,
-            out_dir,
-            stream,
-            seed,
-            console,
-            dry_run,
-            headless,
-            keep_worktrees,
-            parallel,
-        )
-
-
-# ---------------------------------------------------------------------------
-# crt run — eval mode
-# ---------------------------------------------------------------------------
-
-
-def _run_eval(
-    run_cfg: RunConfig,
-    eval_tasks: list,
-    out_dir: Path,
-    stream: bool,
-    seed: int,
-    console: Console,
-    dry_run: bool,
-    headless: bool,
-    keep_worktrees: bool = True,
-    parallel: int = 1,
-) -> None:
-    total = len(eval_tasks) * len(run_cfg.conditions) * run_cfg.trials
-    console.print(
-        f"[bold]{len(eval_tasks)} tasks x {len(run_cfg.conditions)} conditions"
-        f" x {run_cfg.trials} trials = {total} invocations[/bold]"
-    )
-
-    if dry_run:
-        console.print("Dry run — no agents invoked.")
-        raise typer.Exit(0)
-
-    driver = (
-        StubDriver(seed=seed)
-        if run_cfg.driver.builtin == "stub"
-        else make_driver(run_cfg.driver, stream=stream)
-    )
-    workspace = None
-    if run_cfg.repo:
-        workspace = WorkspaceManager(run_cfg.repo.url, out_dir / ".workspace", run_cfg.repo.commit)
-        console.print("[dim]Cloning repo...[/dim]")
-        workspace.clone()
-
-    checker = AcceptanceChecker(stream=stream)
-    has_assertions = any(t.assertions for t in eval_tasks)
-    assertion_runner = AssertionRunner() if has_assertions else None
-
-    executor = TrialExecutor(
-        workspace=workspace,
-        driver=driver,
-        checker=checker,
-        assertion_runner=assertion_runner,
-        config=run_cfg,
-        keep_worktrees=keep_worktrees,
-    )
-    runner = EvalRunner(
-        config=run_cfg,
-        tasks=eval_tasks,
-        executor=executor,
-    )
     try:
-        if headless:
-            trials = run_headless(runner, console, total, parallel=parallel)
-        else:
-            trials = run_streaming(runner, console, total, parallel=parallel)
-    except PreflightError as exc:
+        resolved = resolve_tasks(tasks, commit_range, acceptance_cmd, run_cfg, out_dir)
+    except ConfigError as exc:
         console.print(f"[red]Error:[/red] {exc}")
         raise typer.Exit(code=1) from None
 
-    context_paths = collect_context_paths(run_cfg, workspace)
-    result = RunResult.from_trials(trials, run_cfg.agent, list(run_cfg.conditions.keys()))
-
-    all_failures = [(t, a) for t in trials for a in t.assertion_results if not a.passed]
-    if all_failures:
-        console.print(f"\n[red bold]{len(all_failures)} assertion failure(s):[/red bold]")
-        for t, a in all_failures:
-            msg = f"  {a.message}" if a.message else ""
-            console.print(f"  [red]✗[/red] {t.task_id}/{t.condition}: {a.name}{msg}")
-        console.print()
-
-    console.print(f"Results: {write_result_json(result, out_dir)}")
-    summary_path = write_summary_md(
-        result,
-        out_dir,
-        context_files=context_paths,
-        heuristics_config=run_cfg.heuristics_config,
-    )
-    console.print(f"Summary: {summary_path}")
-    if workspace:
-        if keep_worktrees:
-            console.print(f"[dim]Worktrees preserved at: {workspace.base_dir}[/dim]")
-        else:
-            workspace.teardown()
-            console.print("[dim]Worktrees cleaned up.[/dim]")
-
-
-# ---------------------------------------------------------------------------
-# crt run — timeline mode
-# ---------------------------------------------------------------------------
-
-
-def _run_timeline(
-    run_cfg: RunConfig,
-    seq_tasks: list,
-    mode: TimelineMode,
-    out_dir: Path,
-    stream: bool,
-    console: Console,
-    dry_run: bool,
-) -> None:
-    if not run_cfg.repo:
-        console.print("[red]Error:[/red] timeline tasks require 'repo' in run config.")
-        raise typer.Exit(code=1)
-
-    out_dir.mkdir(parents=True, exist_ok=True)
-    console.print(
-        f"[bold]{len(seq_tasks)} tasks x {len(run_cfg.conditions)} conditions"
-        f" | mode={mode.value}[/bold]"
-    )
-
-    if dry_run:
-        console.print("Dry run — no agents invoked.")
-        raise typer.Exit(0)
-
-    def on_step(order: int, task_id: str, passed: bool, divergence: int) -> None:
-        status = "[green]PASS[/green]" if passed else "[red]FAIL[/red]"
-        console.print(f"  Step {order}: {task_id} — {status} | divergence: {divergence} lines")
-
-    runner = TimelineRunner(
-        config=run_cfg,
-        tasks=seq_tasks,
-        driver=make_driver(run_cfg.driver, stream=stream),
-        mode=mode,
-        on_step=on_step,
-    )
     try:
-        reports = runner.run(out_dir)
-    except PreflightError as exc:
+        match resolved:
+            case ResolvedTimeline(tasks=seq_tasks):
+                if parallel > 1:
+                    console.print(
+                        "[yellow]Warning:[/yellow] --parallel is ignored for timeline mode "
+                        "(steps are order-dependent)."
+                    )
+                run_timeline(run_cfg, seq_tasks, mode, out_dir, stream, console, dry_run)
+            case ResolvedEval(tasks=eval_tasks):
+                opts = RunOptions(
+                    out_dir=out_dir,
+                    stream=stream,
+                    seed=seed,
+                    console=console,
+                    dry_run=dry_run,
+                    keep_worktrees=keep_worktrees,
+                    parallel=parallel,
+                )
+                run_eval(run_cfg, eval_tasks, opts)
+    except ConfigError as exc:
         console.print(f"[red]Error:[/red] {exc}")
         raise typer.Exit(code=1) from None
-
-    env = _jinja_env()
-    for rpt in reports:
-        console.print(f"\n=== Condition: {rpt.condition} ===")
-        report_path = out_dir / f"TIMELINE-{rpt.condition}.md"
-        report_path.write_text(
-            env.get_template("timeline.md.j2").render(
-                run_id=rpt.run_id,
-                repo_url=run_cfg.repo.url,
-                start_commit=run_cfg.repo.commit,
-                driver=str(run_cfg.driver.command or run_cfg.driver.builtin),
-                condition=rpt.condition,
-                model=run_cfg.agent.model,
-                timestamp=datetime.now(UTC).isoformat(),
-                steps=rpt.steps,
-            ),
-            encoding="utf-8",
-        )
-        console.print(f"  Report: {report_path}")
-        console.print(f"  Database: {rpt.db_path}")
 
 
 # ---------------------------------------------------------------------------

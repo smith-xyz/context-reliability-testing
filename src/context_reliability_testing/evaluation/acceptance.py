@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
-from .models import AcceptanceType, EvalTask
+from ..models import AcceptanceType, EvalTask
 
 
 @dataclass
@@ -141,6 +141,3 @@ class AcceptanceChecker:
                 passed=False, reason=f"no strategy for {task.acceptance.type!r}"
             )
         return strategy.check(task, worktree)
-
-    def preflight(self, task: EvalTask, worktree: Path) -> AcceptanceResult:
-        return self.check(task, worktree)

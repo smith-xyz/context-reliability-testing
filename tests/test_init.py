@@ -6,7 +6,7 @@ from pathlib import Path
 
 import yaml
 
-from context_reliability_testing.init import scaffold
+from context_reliability_testing.scaffold import scaffold
 
 
 def test_scaffold_detects_agents_md(tmp_path: Path) -> None:

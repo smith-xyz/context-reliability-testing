@@ -6,26 +6,45 @@ import asyncio
 import itertools
 import logging
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from enum import StrEnum
 from pathlib import Path
 
+from ..drivers import StubDriver
+from ..drivers.base import Driver
+from ..errors import PreflightError
+from ..models import AcceptanceType, Condition, EvalTask, RunConfig, TrialResult
+from ..workspace import WorkspaceManager
 from .acceptance import AcceptanceChecker
-from .drivers import StubDriver
 from .executor import TrialExecutor
-from .models import AcceptanceType, Condition, EvalTask, RunConfig, TrialResult
-from .workspace import WorkspaceManager
 
 logger = logging.getLogger(__name__)
 
 _MAX_PARALLEL = 32
 _WARN_PARALLEL = 16
 
-ProgressCallback = Callable[[str, TrialResult | None], None]
-"""Called with (phase_label, result_or_none). Phases: preflight, trial, done."""
+
+class PhaseKind(StrEnum):
+    SMOKE_TEST = "smoke_test"
+    PREFLIGHT = "preflight"
+    TRIAL = "trial"
+    RESULT = "result"
 
 
-class PreflightError(RuntimeError):
-    """Raised when acceptance checks fail on the unmodified repo."""
+class PhaseState(StrEnum):
+    RUNNING = "running"
+    PASSED = "passed"
+    SKIPPED = "skipped"
+
+
+@dataclass(frozen=True)
+class PhaseInfo:
+    kind: PhaseKind
+    state: PhaseState = PhaseState.RUNNING
+    detail: str = ""
+
+
+ProgressCallback = Callable[[PhaseInfo, TrialResult | None], None]
 
 
 @dataclass
@@ -39,8 +58,8 @@ class EvalRunner:
     tasks: list[EvalTask]
     executor: TrialExecutor
     on_progress: ProgressCallback | None = None
+    _preflight_done: dict[str, str] = field(default_factory=dict, init=False, repr=False)
 
-    # Convenience accessors for preflight (sync, runs before async grid)
     @property
     def _workspace(self) -> WorkspaceManager | None:
         return self.executor.workspace
@@ -50,10 +69,10 @@ class EvalRunner:
         return self.executor.checker
 
     @property
-    def _driver(self) -> object:
+    def _driver(self) -> Driver:
         return self.executor.driver
 
-    def _emit(self, phase: str, result: TrialResult | None = None) -> None:
+    def _emit(self, phase: PhaseInfo, result: TrialResult | None = None) -> None:
         if self.on_progress:
             self.on_progress(phase, result)
 
@@ -61,7 +80,7 @@ class EvalRunner:
         """Smoke-test the driver with a trivial prompt to catch config issues early."""
         if isinstance(self._driver, StubDriver):
             return
-        self._emit("preflight: agent smoke test")
+        self._emit(PhaseInfo(PhaseKind.SMOKE_TEST))
         dr = self.executor.driver.execute(
             "Reply with the word HELLO and nothing else.",
             cwd,
@@ -75,7 +94,7 @@ class EvalRunner:
                 f"Agent smoke test failed: {dr.error}. "
                 f"Check your driver config, agent auth, and CLI flags.{hint}"
             )
-        self._emit("preflight: agent smoke test passed")
+        self._emit(PhaseInfo(PhaseKind.SMOKE_TEST, PhaseState.PASSED))
 
     def _preflight_task(self, task: EvalTask, worktree: Path) -> None:
         """Just-in-time preflight for a single task. Deduplicates by command."""
@@ -83,19 +102,17 @@ class EvalRunner:
             return
         cmd = task.acceptance.command or task.acceptance.type.value
         if cmd in self._preflight_done:
-            self._emit(
-                f"preflight: {task.id} — same command as {self._preflight_done[cmd]}, skipped"
-            )
+            self._emit(PhaseInfo(PhaseKind.PREFLIGHT, PhaseState.SKIPPED, detail=task.id))
             return
-        self._emit(f"preflight: {task.id} ({cmd})")
-        result = self._checker.preflight(task, worktree)
+        self._emit(PhaseInfo(PhaseKind.PREFLIGHT, detail=task.id))
+        result = self._checker.check(task, worktree)
         if not result.passed:
             raise PreflightError(
                 f"Preflight failed for task '{task.id}': {result.reason}. "
                 "Fix the repo baseline before running evaluations."
             )
         self._preflight_done[cmd] = task.id
-        self._emit(f"preflight: {task.id} passed")
+        self._emit(PhaseInfo(PhaseKind.PREFLIGHT, PhaseState.PASSED, detail=task.id))
 
     def _effective_parallel(self, parallel: int) -> int:
         total = len(self.tasks) * len(self.config.conditions) * self.config.trials
@@ -115,9 +132,7 @@ class EvalRunner:
             )
             return 1
         if effective != parallel:
-            logger.info(
-                "parallel=%d clamped to %d (total work items)", parallel, effective
-            )
+            logger.info("parallel=%d clamped to %d (total work items)", parallel, effective)
         if effective > _WARN_PARALLEL:
             logger.warning(
                 "parallel=%d — high parallelism may incur significant API costs "
@@ -131,7 +146,7 @@ class EvalRunner:
         return asyncio.run(self.arun(parallel=1))
 
     async def arun(self, parallel: int = 1) -> list[TrialResult]:
-        self._preflight_done: dict[str, str] = {}
+        self._preflight_done.clear()
         effective = self._effective_parallel(parallel)
 
         preflight_wt: Path | None = None
@@ -164,9 +179,10 @@ class EvalRunner:
             trial_num: int,
         ) -> TrialResult:
             async with sem:
-                self._emit(f"trial: {task.id} / {cond_name} #{trial_num}")
+                trial_detail = f"{task.id} / {cond_name} #{trial_num}"
+                self._emit(PhaseInfo(PhaseKind.TRIAL, detail=trial_detail))
                 result = await self.executor.execute(task, cond_name, condition, trial_num)
-                self._emit("result", result)
+                self._emit(PhaseInfo(PhaseKind.RESULT), result)
                 return result
 
         results = await asyncio.gather(

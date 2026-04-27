@@ -4,7 +4,7 @@ from pathlib import Path
 
 import yaml
 
-from context_reliability_testing.heuristics import (
+from context_reliability_testing.reporting.heuristics import (
     ClassifierDef,
     HeuristicsConfig,
     RuleClassification,

@@ -4,11 +4,11 @@ import random
 from pathlib import Path
 
 from ..models import TokenUsage
-from .base import DriverResult
+from .base import Driver, DriverResult
 
 
-class StubDriver:
-    """Deterministic fake for pipeline testing. Conforms to Driver protocol."""
+class StubDriver(Driver):
+    """Deterministic fake for pipeline testing."""
 
     def __init__(self, pass_rate: float = 0.7, seed: int | None = None) -> None:
         self._rng = random.Random(seed)

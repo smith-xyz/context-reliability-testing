@@ -9,10 +9,12 @@ import sys
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
-from .models import AssertionOutcome
-from .trial_context import TrialContext
+from ..models import AssertionOutcome
+from .context import TrialContext
 
 logger = logging.getLogger(__name__)
+
+_EXIT_LABELS = {3: "internal error", 4: "usage error", 5: "no tests collected"}
 
 
 class AssertionError_(RuntimeError):
@@ -75,8 +77,6 @@ class AssertionRunner:
             "timeout": 120,
         }
         proc = subprocess.run(cmd, capture_output=True, text=True, check=False, **kwargs)
-
-        _EXIT_LABELS = {3: "internal error", 4: "usage error", 5: "no tests collected"}
         if proc.returncode >= 3:
             stderr = proc.stderr or ""
             label = _EXIT_LABELS.get(proc.returncode, f"exit {proc.returncode}")
@@ -87,12 +87,11 @@ class AssertionRunner:
         if proc.returncode != 0 and proc.stdout:
             self._print_output(proc.stdout)
 
-    def _print_output(self, output: str) -> None:
+    @staticmethod
+    def _print_output(output: str) -> None:
         """Print pytest output so failures are visible in the terminal."""
-        import sys as _sys
-
-        _sys.stderr.write(output)
-        _sys.stderr.flush()
+        sys.stderr.write(output)
+        sys.stderr.flush()
 
     @staticmethod
     def _parse_junit(xml_path: Path) -> list[AssertionOutcome]:

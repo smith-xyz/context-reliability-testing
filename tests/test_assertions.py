@@ -8,10 +8,8 @@ from pathlib import Path
 
 import pytest
 
-from context_reliability_testing.assertions import AssertionRunner
+from context_reliability_testing.artifacts import AssertionRunner, TrialBundle, TrialContext
 from context_reliability_testing.models import AssertionOutcome
-from context_reliability_testing.trial_bundle import TrialBundle
-from context_reliability_testing.trial_context import TrialContext
 
 SAMPLE_DIFF = textwrap.dedent("""\
     diff --git a/foo.go b/foo.go
@@ -114,9 +112,18 @@ class TestTrialBundle:
         assert bundle.artifact_dir.name.startswith("my-task-no_context-1-")
 
     def test_write_creates_directory(self, tmp_path: Path) -> None:
-        bundle = self._make(tmp_path)
-        bundle._diff = SAMPLE_DIFF
-        bundle._changed_files = ["foo.go"]
+        worktree = tmp_path / "worktree"
+        worktree.mkdir()
+        bundle = TrialBundle(
+            output_dir=tmp_path / "out",
+            task_id="my-task",
+            condition="no_context",
+            trial_number=1,
+            worktree=worktree,
+            passed=True,
+            diff=SAMPLE_DIFF,
+            changed_files=["foo.go"],
+        )
         bundle.write()
         assert (bundle.artifact_dir / "diff.patch").exists()
         assert (bundle.artifact_dir / "changed_files.txt").read_text().strip() == "foo.go"
@@ -128,9 +135,18 @@ class TestTrialBundle:
         assert not (bundle.artifact_dir / "diff.patch").exists()
 
     def test_write_context_json(self, tmp_path: Path) -> None:
-        bundle = self._make(tmp_path)
-        bundle._diff = "some diff"
-        bundle._changed_files = ["a.py"]
+        worktree = tmp_path / "worktree"
+        worktree.mkdir()
+        bundle = TrialBundle(
+            output_dir=tmp_path / "out",
+            task_id="my-task",
+            condition="no_context",
+            trial_number=1,
+            worktree=worktree,
+            passed=True,
+            diff="some diff",
+            changed_files=["a.py"],
+        )
         path = bundle.write_context_json()
         assert path.exists()
         data = json.loads(path.read_text())
@@ -141,9 +157,18 @@ class TestTrialBundle:
         assert data["passed"] is True
 
     def test_to_context(self, tmp_path: Path) -> None:
-        bundle = self._make(tmp_path)
-        bundle._diff = SAMPLE_DIFF
-        bundle._changed_files = ["foo.go"]
+        worktree = tmp_path / "worktree"
+        worktree.mkdir()
+        bundle = TrialBundle(
+            output_dir=tmp_path / "out",
+            task_id="my-task",
+            condition="no_context",
+            trial_number=1,
+            worktree=worktree,
+            passed=True,
+            diff=SAMPLE_DIFF,
+            changed_files=["foo.go"],
+        )
         ctx = bundle.to_context()
         assert isinstance(ctx, TrialContext)
         assert ctx.task_id == "my-task"
@@ -196,7 +221,7 @@ class TestJunitParsing:
         assert "ERROR:" in results[0].message
 
     def test_missing_xml_raises(self, tmp_path: Path) -> None:
-        from context_reliability_testing.assertions import AssertionError_
+        from context_reliability_testing.artifacts import AssertionError_
 
         with pytest.raises(AssertionError_, match="JUnit XML"):
             AssertionRunner._parse_junit(tmp_path / "nope.xml")
@@ -302,7 +327,7 @@ class TestAssertionRunnerIntegration:
         assert "intentional failure" in results[0].message
 
     def test_missing_file_raises(self, tmp_path: Path) -> None:
-        from context_reliability_testing.assertions import AssertionError_
+        from context_reliability_testing.artifacts import AssertionError_
 
         ctx = TrialContext(
             artifact_dir=tmp_path,

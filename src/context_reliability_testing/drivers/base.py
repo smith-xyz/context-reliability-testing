@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol, runtime_checkable
 
 from ..models import TokenUsage
 
@@ -19,8 +19,8 @@ class DriverResult:
     num_turns: int | None = None
 
 
-@runtime_checkable
-class Driver(Protocol):
+class Driver(ABC):
+    @abstractmethod
     def execute(self, prompt: str, workspace: Path, model: str, max_turns: int) -> DriverResult: ...
 
     @property

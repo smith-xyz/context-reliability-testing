@@ -10,11 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from uuid import uuid4
 
-from .models import Acceptance, AcceptanceType, SequentialTask
-
 logger = logging.getLogger(__name__)
-
-_RECORD_SEP = "---CRT-RECORD---"
 
 
 @dataclass
@@ -100,40 +96,6 @@ class WorkspaceManager:
         """Diff between two refs on the bare clone (no worktree needed)."""
         out = self.git(["diff", "--numstat", ref_a, ref_b], cwd=self._clone_dir)
         return self._parse_numstat(out)
-
-    def derive_tasks(
-        self, range_spec: str, acceptance: Acceptance | None = None
-    ) -> list[SequentialTask]:
-        """Build SequentialTask list from git log over a commit range.
-
-        Uses a record separator to handle multiline commit messages safely.
-        """
-        if acceptance is None:
-            acceptance = Acceptance(type=AcceptanceType.TEST_COMMAND, command="make test")
-        fmt = f"%H%x00%s%x00%b{_RECORD_SEP}"
-        out = self.git(["log", "--reverse", f"--format={fmt}", range_spec], cwd=self._clone_dir)
-        tasks: list[SequentialTask] = []
-        for order, block in enumerate(out.split(_RECORD_SEP), 1):
-            block = block.strip()
-            if not block:
-                continue
-            parts = block.split("\0", 2)
-            if len(parts) < 2:
-                continue
-            sha, subject = parts[0], parts[1]
-            body = parts[2].strip() if len(parts) > 2 else ""
-            prompt = f"{subject}\n\n{body}".strip() if body else subject
-            tasks.append(
-                SequentialTask(
-                    id=f"commit-{sha[:8]}",
-                    prompt=prompt,
-                    task_order=order,
-                    resolved_commit=sha,
-                    acceptance=acceptance,
-                    marker=subject,
-                )
-            )
-        return tasks
 
     def teardown(self) -> None:
         for wt in list(self._worktrees):

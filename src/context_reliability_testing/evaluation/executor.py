@@ -12,13 +12,11 @@ import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .acceptance import AcceptanceChecker
-from .assertions import AssertionRunner
-from .conditions import apply_condition
-from .drivers.base import Driver
-from .models import AssertionOutcome, Condition, EvalTask, RunConfig, TrialResult
-from .trial_bundle import TrialBundle
-from .workspace import WorkspaceManager
+from ..artifacts import AssertionRunner, TrialBundle
+from ..drivers.base import Driver, DriverResult
+from ..models import AssertionOutcome, Condition, EvalTask, RunConfig, TrialResult
+from ..workspace import WorkspaceManager, apply_condition
+from .acceptance import AcceptanceChecker, AcceptanceResult
 
 logger = logging.getLogger(__name__)
 
@@ -72,14 +70,29 @@ class TrialExecutor:
         dr = await self.driver.execute_async(
             rendered, worktree, self.config.agent.model, self.config.agent.max_steps
         )
-        exceeded_max = dr.num_turns is not None and dr.num_turns > self.config.agent.max_steps
         ar = await asyncio.to_thread(self.checker.check, task, worktree)
         artifact_dir, assertion_results = await self._collect_artifacts(
             task, cond_name, trial_num, worktree, ar.passed
         )
 
+        return self._build_trial_result(
+            task, cond_name, trial_num, dr, ar, artifact_dir, assertion_results
+        )
+
+    def _build_trial_result(
+        self,
+        task: EvalTask,
+        cond_name: str,
+        trial_num: int,
+        dr: DriverResult,
+        ar: AcceptanceResult,
+        artifact_dir: str | None,
+        assertion_results: list[AssertionOutcome],
+    ) -> TrialResult:
+        exceeded_max = dr.num_turns is not None and dr.num_turns > self.config.agent.max_steps
         assertions_passed = all(a.passed for a in assertion_results)
         overall_passed = ar.passed and assertions_passed and not exceeded_max
+
         error = dr.error or (None if ar.passed else ar.reason)
         if exceeded_max:
             error = f"agent used {dr.num_turns} turns (max_steps={self.config.agent.max_steps})"

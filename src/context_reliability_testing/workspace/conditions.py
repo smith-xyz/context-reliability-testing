@@ -6,7 +6,7 @@ import logging
 import shutil
 from pathlib import Path
 
-from .models import Condition
+from ..models import Condition
 
 logger = logging.getLogger(__name__)
 

@@ -9,7 +9,7 @@ import time
 from pathlib import Path
 from uuid import uuid4
 
-from .trial_context import TrialContext
+from .context import TrialContext
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +27,8 @@ class TrialBundle:
         worktree: Path,
         passed: bool,
         exclude_patterns: list[str] | None = None,
+        diff: str = "",
+        changed_files: list[str] | None = None,
     ) -> None:
         ts = int(time.time())
         uid = uuid4().hex[:8]
@@ -39,8 +41,8 @@ class TrialBundle:
         self._worktree = worktree
         self._passed = passed
         self._exclude_patterns = exclude_patterns or []
-        self._diff: str = ""
-        self._changed_files: list[str] = []
+        self._diff = diff
+        self._changed_files = changed_files or []
 
     @property
     def artifact_dir(self) -> Path:
@@ -75,9 +77,12 @@ class TrialBundle:
             }
         )
 
+    def _ensure_dir(self) -> None:
+        self._artifact_dir.mkdir(parents=True, exist_ok=True)
+
     def write(self) -> None:
         """Persist all collected artifacts to disk."""
-        self._artifact_dir.mkdir(parents=True, exist_ok=True)
+        self._ensure_dir()
         if self._diff:
             (self._artifact_dir / "diff.patch").write_text(self._diff)
         if self._changed_files:
@@ -87,22 +92,9 @@ class TrialBundle:
 
     def write_context_json(self) -> Path:
         """Serialize TrialContext to context.json in artifact dir. Returns path."""
-        self._artifact_dir.mkdir(parents=True, exist_ok=True)
+        self._ensure_dir()
         ctx_path = self._artifact_dir / "context.json"
-        ctx_path.write_text(
-            json.dumps(
-                {
-                    "artifact_dir": str(self._artifact_dir),
-                    "worktree": str(self._worktree),
-                    "diff": self._diff,
-                    "changed_files": self._changed_files,
-                    "task_id": self._task_id,
-                    "condition": self._condition,
-                    "trial_number": self._trial_number,
-                    "passed": self._passed,
-                }
-            )
-        )
+        ctx_path.write_text(json.dumps(self.to_context().to_dict()))
         return ctx_path
 
     def to_context(self) -> TrialContext:

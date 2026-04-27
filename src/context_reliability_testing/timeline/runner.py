@@ -8,11 +8,11 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .acceptance import AcceptanceChecker
-from .conditions import apply_condition
-from .divergence import SnapshotMetrics, StepMetrics, TimelineStep, TimelineTracker
-from .drivers import Driver
-from .models import (
+from ..drivers import Driver
+from ..drivers.base import DriverResult
+from ..errors import PreflightError
+from ..evaluation.acceptance import AcceptanceChecker
+from ..models import (
     Condition,
     EvalTask,
     FailurePolicy,
@@ -20,12 +20,11 @@ from .models import (
     SequentialTask,
     TimelineMode,
 )
-from .runner import PreflightError
-from .workspace import DiffStat, WorkspaceManager
+from ..workspace import DiffStat, WorkspaceManager, apply_condition
+from .divergence import TimelineTracker
+from .models import SnapshotMetrics, StepMetrics, TimelineStep
 
 logger = logging.getLogger(__name__)
-
-__all__ = ["TimelineRunner", "ConditionReport", "PreflightError"]
 
 
 @dataclass
@@ -58,7 +57,7 @@ class TimelineRunner:
         ws.clone()
         wt = ws.create_worktree("preflight")
         task = EvalTask(id=first.id, prompt=first.prompt, acceptance=first.acceptance)
-        result = self.checker.preflight(task, wt)
+        result = self.checker.check(task, wt)
         ws.teardown()
         if not result.passed:
             raise PreflightError(
@@ -143,7 +142,7 @@ class TimelineRunner:
             condition=cond_name,
             run_id=run_id,
             db_path=db_path,
-            report_path=db_path,  # placeholder, CLI writes the actual report
+            report_path=db_path,
             steps=steps,
         )
 
@@ -167,57 +166,70 @@ class TimelineRunner:
         )
         ar = self.checker.check(eval_task, worktree)
 
-        diff_output, ds = _safe_diff(ws, worktree, task.resolved_commit)
-        files_agent = _safe_agent_files(ws, worktree)
-        files_actual = _safe_actual_files(ws, task.resolved_commit)
+        step_metrics = self._build_step_metrics(ws, worktree, task, ar.passed, dr)
+        snapshot = self._build_snapshot(ws, worktree, task.resolved_commit)
+        return TimelineStep(step=step_metrics, snapshot=snapshot)
 
-        return TimelineStep(
-            step=StepMetrics(
-                task_id=task.id,
-                task_order=task.task_order,
-                resolved_commit=task.resolved_commit,
-                marker=task.marker,
-                tests_pass=ar.passed,
-                files_changed_agent=files_agent,
-                files_changed_actual=files_actual,
-                files_overlap_pct=_overlap(files_agent, files_actual),
-                tokens=dr.tokens,
-                wall_time_s=dr.wall_time_s,
-                tool_calls=dr.tool_calls,
-                error=dr.error,
-            ),
-            snapshot=SnapshotMetrics(
-                files_differ=len(ds.files_changed),
-                line_delta=ds.lines_added + ds.lines_removed,
-                diff_compressed=zlib.compress(diff_output.encode()),
-            ),
+    def _build_step_metrics(
+        self,
+        ws: WorkspaceManager,
+        worktree: Path,
+        task: SequentialTask,
+        tests_pass: bool,
+        dr: DriverResult,
+    ) -> StepMetrics:
+        files_agent = self._safe_agent_files(ws, worktree)
+        files_actual = self._safe_actual_files(ws, task.resolved_commit)
+        return StepMetrics(
+            task_id=task.id,
+            task_order=task.task_order,
+            resolved_commit=task.resolved_commit,
+            marker=task.marker,
+            tests_pass=tests_pass,
+            files_changed_agent=files_agent,
+            files_changed_actual=files_actual,
+            files_overlap_pct=_overlap(files_agent, files_actual),
+            tokens=dr.tokens,
+            wall_time_s=dr.wall_time_s,
+            tool_calls=dr.tool_calls,
+            error=dr.error,
         )
 
+    def _build_snapshot(
+        self, ws: WorkspaceManager, worktree: Path, resolved_commit: str
+    ) -> SnapshotMetrics:
+        diff_output, ds = self._safe_diff(ws, worktree, resolved_commit)
+        return SnapshotMetrics(
+            files_differ=len(ds.files_changed),
+            line_delta=ds.lines_added + ds.lines_removed,
+            diff_compressed=zlib.compress(diff_output.encode()),
+        )
 
-def _safe_diff(ws: WorkspaceManager, worktree: Path, ref: str) -> tuple[str, DiffStat]:
-    empty = DiffStat(files_changed=[], lines_added=0, lines_removed=0)
-    try:
-        return ws.git(["diff", ref, "HEAD"], cwd=worktree), ws.diff_stat(worktree, ref)
-    except Exception as exc:
-        logger.debug("diff against %s failed: %s", ref, exc)
-        return "", empty
+    @staticmethod
+    def _safe_diff(ws: WorkspaceManager, worktree: Path, ref: str) -> tuple[str, DiffStat]:
+        empty = DiffStat(files_changed=[], lines_added=0, lines_removed=0)
+        try:
+            return ws.git(["diff", ref, "HEAD"], cwd=worktree), ws.diff_stat(worktree, ref)
+        except Exception as exc:
+            logger.debug("diff against %s failed: %s", ref, exc)
+            return "", empty
 
+    @staticmethod
+    def _safe_agent_files(ws: WorkspaceManager, worktree: Path) -> list[str]:
+        try:
+            out = ws.git(["diff", "--name-only", "HEAD~1", "HEAD"], cwd=worktree)
+            return [f for f in out.strip().splitlines() if f]
+        except Exception as exc:
+            logger.debug("agent diff failed: %s", exc)
+            return []
 
-def _safe_agent_files(ws: WorkspaceManager, worktree: Path) -> list[str]:
-    try:
-        out = ws.git(["diff", "--name-only", "HEAD~1", "HEAD"], cwd=worktree)
-        return [f for f in out.strip().splitlines() if f]
-    except Exception as exc:
-        logger.debug("agent diff failed: %s", exc)
-        return []
-
-
-def _safe_actual_files(ws: WorkspaceManager, resolved_commit: str) -> list[str]:
-    try:
-        return ws.diff_stat_range(f"{resolved_commit}~1", resolved_commit).files_changed
-    except Exception as exc:
-        logger.debug("actual diff for %s failed: %s", resolved_commit, exc)
-        return []
+    @staticmethod
+    def _safe_actual_files(ws: WorkspaceManager, resolved_commit: str) -> list[str]:
+        try:
+            return ws.diff_stat_range(f"{resolved_commit}~1", resolved_commit).files_changed
+        except Exception as exc:
+            logger.debug("actual diff for %s failed: %s", resolved_commit, exc)
+            return []
 
 
 def _overlap(a: list[str], b: list[str]) -> float:

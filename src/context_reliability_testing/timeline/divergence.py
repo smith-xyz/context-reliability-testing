@@ -1,52 +1,17 @@
+"""TimelineTracker: append-only SQLite store for timeline evaluation data."""
+
 from __future__ import annotations
 
 import json
 import sqlite3
 import zlib
-from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from .models import TokenUsage
-
-
-@dataclass
-class StepMetrics:
-    task_id: str
-    task_order: int
-    resolved_commit: str | None
-    marker: str | None
-    tests_pass: bool
-    files_changed_agent: list[str]
-    files_changed_actual: list[str]
-    files_overlap_pct: float
-    tokens: TokenUsage
-    wall_time_s: float
-    tool_calls: int
-    error: str | None = None
-
-
-@dataclass
-class SnapshotMetrics:
-    files_differ: int
-    line_delta: int
-    diff_compressed: bytes
-
-
-@dataclass
-class TimelineStep:
-    step: StepMetrics
-    snapshot: SnapshotMetrics
-
-
-@dataclass
-class RunComparison:
-    run_a_id: str
-    run_b_id: str
-    aligned_steps: list[tuple[TimelineStep | None, TimelineStep | None]]
-
+from ..models import TokenUsage
+from .models import RunComparison, SnapshotMetrics, StepMetrics, TimelineStep
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS runs (
@@ -95,6 +60,7 @@ class TimelineTracker:
     def __init__(self, db_path: Path) -> None:
         self.db_path = db_path
         self._conn = sqlite3.connect(str(db_path))
+        self._conn.row_factory = sqlite3.Row
         self._conn.executescript(_SCHEMA)
 
     def create_run(
@@ -103,8 +69,19 @@ class TimelineTracker:
         run_id = str(uuid4())
         now = datetime.now(UTC).isoformat()
         self._conn.execute(
-            "INSERT INTO runs VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (run_id, repo_url, start_commit, driver, condition, model, now),
+            """INSERT INTO runs (run_id, repo_url, start_commit, driver,
+               condition_name, agent_model, created_at)
+               VALUES (:run_id, :repo_url, :start_commit, :driver,
+                       :condition_name, :agent_model, :created_at)""",
+            {
+                "run_id": run_id,
+                "repo_url": repo_url,
+                "start_commit": start_commit,
+                "driver": driver,
+                "condition_name": condition,
+                "agent_model": model,
+                "created_at": now,
+            },
         )
         self._conn.commit()
         return run_id
@@ -112,43 +89,48 @@ class TimelineTracker:
     def record_step(self, run_id: str, step: TimelineStep) -> None:
         now = datetime.now(UTC).isoformat()
         s, snap = step.step, step.snapshot
+        params = {
+            "run_id": run_id,
+            "task_id": s.task_id,
+            "task_order": s.task_order,
+            "resolved_commit": s.resolved_commit,
+            "marker": s.marker,
+            "tests_pass": int(s.tests_pass),
+            "files_changed_agent": json.dumps(s.files_changed_agent),
+            "files_changed_actual": json.dumps(s.files_changed_actual),
+            "files_overlap_pct": s.files_overlap_pct,
+            "tokens_prompt": s.tokens.prompt,
+            "tokens_completion": s.tokens.completion,
+            "wall_time_s": s.wall_time_s,
+            "tool_calls": s.tool_calls,
+            "error": s.error,
+            "snapshot_files_differ": snap.files_differ,
+            "snapshot_line_delta": snap.line_delta,
+            "created_at": now,
+        }
         cursor = self._conn.execute(
             """INSERT INTO steps (run_id, task_id, task_order, resolved_commit, marker,
                tests_pass, files_changed_agent, files_changed_actual, files_overlap_pct,
                tokens_prompt, tokens_completion, wall_time_s, tool_calls, error,
                snapshot_files_differ, snapshot_line_delta, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (
-                run_id,
-                s.task_id,
-                s.task_order,
-                s.resolved_commit,
-                s.marker,
-                int(s.tests_pass),
-                json.dumps(s.files_changed_agent),
-                json.dumps(s.files_changed_actual),
-                s.files_overlap_pct,
-                s.tokens.prompt,
-                s.tokens.completion,
-                s.wall_time_s,
-                s.tool_calls,
-                s.error,
-                snap.files_differ,
-                snap.line_delta,
-                now,
-            ),
+               VALUES (:run_id, :task_id, :task_order, :resolved_commit, :marker,
+                       :tests_pass, :files_changed_agent, :files_changed_actual,
+                       :files_overlap_pct, :tokens_prompt, :tokens_completion,
+                       :wall_time_s, :tool_calls, :error,
+                       :snapshot_files_differ, :snapshot_line_delta, :created_at)""",
+            params,
         )
         step_id = cursor.lastrowid
         self._conn.execute(
-            "INSERT INTO diffs (step_id, diff_type, diff_compressed, diff_size_bytes, created_at)"
-            " VALUES (?, ?, ?, ?, ?)",
-            (
-                step_id,
-                "snapshot",
-                snap.diff_compressed,
-                len(zlib.decompress(snap.diff_compressed)),
-                now,
-            ),
+            """INSERT INTO diffs (step_id, diff_type, diff_compressed, diff_size_bytes, created_at)
+               VALUES (:step_id, :diff_type, :diff_compressed, :diff_size_bytes, :created_at)""",
+            {
+                "step_id": step_id,
+                "diff_type": "snapshot",
+                "diff_compressed": snap.diff_compressed,
+                "diff_size_bytes": len(zlib.decompress(snap.diff_compressed)),
+                "created_at": now,
+            },
         )
         self._conn.commit()
 
@@ -158,12 +140,11 @@ class TimelineTracker:
         ).fetchall()
         steps: list[TimelineStep] = []
         for row in rows:
-            step_id = row[0]
             diff_row = self._conn.execute(
                 "SELECT diff_compressed FROM diffs WHERE step_id = ? AND diff_type = 'snapshot'",
-                (step_id,),
+                (row["id"],),
             ).fetchone()
-            diff_data = diff_row[0] if diff_row else zlib.compress(b"")
+            diff_data = diff_row["diff_compressed"] if diff_row else zlib.compress(b"")
             steps.append(self._row_to_step(row, diff_data))
         return steps
 
@@ -176,16 +157,7 @@ class TimelineTracker:
 
     def list_runs(self) -> list[dict[str, Any]]:
         rows = self._conn.execute("SELECT * FROM runs ORDER BY created_at DESC").fetchall()
-        cols = [
-            "run_id",
-            "repo_url",
-            "start_commit",
-            "driver",
-            "condition_name",
-            "agent_model",
-            "created_at",
-        ]
-        return [dict(zip(cols, row, strict=True)) for row in rows]
+        return [dict(row) for row in rows]
 
     def close(self) -> None:
         self._conn.close()
@@ -197,25 +169,28 @@ class TimelineTracker:
         self.close()
 
     @staticmethod
-    def _row_to_step(row: tuple[Any, ...], diff_compressed: bytes) -> TimelineStep:
+    def _row_to_step(row: sqlite3.Row, diff_compressed: bytes) -> TimelineStep:
         return TimelineStep(
             step=StepMetrics(
-                task_id=row[2],
-                task_order=row[3],
-                resolved_commit=row[4],
-                marker=row[5],
-                tests_pass=bool(row[6]),
-                files_changed_agent=json.loads(row[7]),
-                files_changed_actual=json.loads(row[8]),
-                files_overlap_pct=row[9] or 0.0,
-                tokens=TokenUsage(prompt=row[10] or 0, completion=row[11] or 0),
-                wall_time_s=row[12] or 0.0,
-                tool_calls=row[13] or 0,
-                error=row[14],
+                task_id=row["task_id"],
+                task_order=row["task_order"],
+                resolved_commit=row["resolved_commit"],
+                marker=row["marker"],
+                tests_pass=bool(row["tests_pass"]),
+                files_changed_agent=json.loads(row["files_changed_agent"]),
+                files_changed_actual=json.loads(row["files_changed_actual"]),
+                files_overlap_pct=row["files_overlap_pct"] or 0.0,
+                tokens=TokenUsage(
+                    prompt=row["tokens_prompt"] or 0,
+                    completion=row["tokens_completion"] or 0,
+                ),
+                wall_time_s=row["wall_time_s"] or 0.0,
+                tool_calls=row["tool_calls"] or 0,
+                error=row["error"],
             ),
             snapshot=SnapshotMetrics(
-                files_differ=row[15],
-                line_delta=row[16],
+                files_differ=row["snapshot_files_differ"],
+                line_delta=row["snapshot_line_delta"],
                 diff_compressed=diff_compressed,
             ),
         )

@@ -8,14 +8,14 @@ from pathlib import Path
 
 import pytest
 
-from context_reliability_testing.divergence import (
+from context_reliability_testing.models import TokenUsage
+from context_reliability_testing.timeline.divergence import TimelineTracker
+from context_reliability_testing.timeline.models import (
     RunComparison,
     SnapshotMetrics,
     StepMetrics,
     TimelineStep,
-    TimelineTracker,
 )
-from context_reliability_testing.models import TokenUsage
 
 
 def _step(

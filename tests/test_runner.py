@@ -1,19 +1,33 @@
-"""Tests for the eval runner and report pipeline."""
+"""Tests for the eval runner, preflight, and report pipeline."""
 
 from __future__ import annotations
 
 import asyncio
 from pathlib import Path
 
+import pytest
 import yaml
 
-from context_reliability_testing.acceptance import AcceptanceChecker
 from context_reliability_testing.drivers.stub import StubDriver
-from context_reliability_testing.executor import TrialExecutor
-from context_reliability_testing.models import EvalTask, RunConfig, RunResult
-from context_reliability_testing.report import write_result_json, write_summary_md
-from context_reliability_testing.runner import EvalRunner
+from context_reliability_testing.errors import PreflightError
+from context_reliability_testing.evaluation import (
+    AcceptanceChecker,
+    EvalRunner,
+    PhaseInfo,
+    PhaseState,
+    TrialExecutor,
+)
+from context_reliability_testing.models import (
+    Acceptance,
+    AcceptanceType,
+    EvalTask,
+    RunConfig,
+    RunResult,
+)
+from context_reliability_testing.reporting import write_result_json, write_summary_md
 from context_reliability_testing.workspace import WorkspaceManager
+
+from .conftest import init_repo_with_commits
 
 EXAMPLES = Path(__file__).resolve().parent.parent / "examples"
 
@@ -125,3 +139,150 @@ def test_parallel_clamps_without_workspace() -> None:
     runner = _make_runner(cfg, tasks, workspace=None)
     effective = runner._effective_parallel(4)
     assert effective == 1
+
+
+# ---------------------------------------------------------------------------
+# Preflight tests
+# ---------------------------------------------------------------------------
+
+
+class TestPreflight:
+    def _make_preflight_runner(
+        self, tmp_path: Path, acceptance_cmd: str, *, pass_rate: float = 0.7
+    ) -> EvalRunner:
+        origin = tmp_path / "origin"
+        init_repo_with_commits(origin, 1)
+        cfg = RunConfig.model_validate(
+            {
+                "agent": {"model": "m"},
+                "conditions": {"bare": {"context_files": []}},
+                "repo": {"url": str(origin), "commit": "HEAD"},
+            }
+        )
+        tasks = [
+            EvalTask(
+                id="t1",
+                prompt="p",
+                acceptance=Acceptance(type=AcceptanceType.TEST_COMMAND, command=acceptance_cmd),
+            )
+        ]
+        ws = WorkspaceManager(str(origin), tmp_path / "ws")
+        ws.clone()
+        executor = TrialExecutor(
+            workspace=ws,
+            driver=StubDriver(seed=1, pass_rate=pass_rate),
+            checker=AcceptanceChecker(),
+            assertion_runner=None,
+            config=cfg,
+        )
+        return EvalRunner(config=cfg, tasks=tasks, executor=executor)
+
+    def test_preflight_passes_on_good_repo(self, tmp_path: Path) -> None:
+        runner = self._make_preflight_runner(tmp_path, "true")
+        ws = runner._workspace
+        assert ws is not None
+        wt = ws.create_worktree("preflight")
+        try:
+            runner._preflight_done = {}
+            runner._preflight_task(runner.tasks[0], wt)
+        finally:
+            ws.cleanup_worktree(wt)
+            ws.teardown()
+
+    def test_preflight_raises_on_broken_repo(self, tmp_path: Path) -> None:
+        runner = self._make_preflight_runner(tmp_path, "false")
+        ws = runner._workspace
+        assert ws is not None
+        wt = ws.create_worktree("preflight")
+        try:
+            runner._preflight_done = {}
+            with pytest.raises(PreflightError, match="Preflight failed"):
+                runner._preflight_task(runner.tasks[0], wt)
+        finally:
+            ws.cleanup_worktree(wt)
+            ws.teardown()
+
+    def test_run_calls_preflight(self, tmp_path: Path) -> None:
+        runner = self._make_preflight_runner(tmp_path, "false")
+        with pytest.raises(PreflightError):
+            runner.run()
+        runner._workspace.teardown()  # type: ignore[union-attr]
+
+    def test_preflight_deduplicates_same_command(self, tmp_path: Path) -> None:
+        origin = tmp_path / "origin"
+        init_repo_with_commits(origin, 1)
+        cfg = RunConfig.model_validate(
+            {
+                "agent": {"model": "m"},
+                "conditions": {"bare": {"context_files": []}},
+                "repo": {"url": str(origin), "commit": "HEAD"},
+            }
+        )
+        tasks = [
+            EvalTask(
+                id="t1",
+                prompt="p",
+                acceptance=Acceptance(type=AcceptanceType.TEST_COMMAND, command="true"),
+            ),
+            EvalTask(
+                id="t2",
+                prompt="p",
+                acceptance=Acceptance(type=AcceptanceType.TEST_COMMAND, command="true"),
+            ),
+        ]
+        ws = WorkspaceManager(str(origin), tmp_path / "ws")
+        ws.clone()
+        executor = TrialExecutor(
+            workspace=ws,
+            driver=StubDriver(seed=1),
+            checker=AcceptanceChecker(),
+            assertion_runner=None,
+            config=cfg,
+        )
+        runner = EvalRunner(config=cfg, tasks=tasks, executor=executor)
+        phases: list[PhaseInfo] = []
+        runner.on_progress = lambda phase, _r: phases.append(phase)
+        wt = ws.create_worktree("preflight")
+        try:
+            runner._preflight_done = {}
+            runner._preflight_task(tasks[0], wt)
+            runner._preflight_task(tasks[1], wt)
+            assert any(p.state == PhaseState.SKIPPED for p in phases)
+        finally:
+            ws.cleanup_worktree(wt)
+            ws.teardown()
+
+    def test_preflight_skips_manual(self, tmp_path: Path) -> None:
+        origin = tmp_path / "origin"
+        init_repo_with_commits(origin, 1)
+        cfg = RunConfig.model_validate(
+            {
+                "agent": {"model": "m"},
+                "conditions": {"bare": {"context_files": []}},
+                "repo": {"url": str(origin), "commit": "HEAD"},
+            }
+        )
+        tasks = [
+            EvalTask(
+                id="t1",
+                prompt="p",
+                acceptance=Acceptance(type=AcceptanceType.MANUAL),
+            )
+        ]
+        ws = WorkspaceManager(str(origin), tmp_path / "ws")
+        ws.clone()
+        executor = TrialExecutor(
+            workspace=ws,
+            driver=StubDriver(seed=1),
+            checker=AcceptanceChecker(),
+            assertion_runner=None,
+            config=cfg,
+        )
+        runner = EvalRunner(config=cfg, tasks=tasks, executor=executor)
+        wt = ws.create_worktree("preflight")
+        try:
+            runner._preflight_done = {}
+            runner._preflight_task(tasks[0], wt)
+        finally:
+            ws.cleanup_worktree(wt)
+            ws.teardown()
