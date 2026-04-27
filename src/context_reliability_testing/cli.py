@@ -134,6 +134,14 @@ def run(
         console.print(f"[red]Error:[/red] {exc}")
         raise typer.Exit(code=1) from None
 
+    if (
+        isinstance(resolved, ResolvedEval)
+        and parallel == 1
+        and len(resolved.tasks) > 1
+        and not stream
+    ):
+        console.print("[dim]Tip: use --parallel/-p to run trials concurrently.[/dim]")
+
     try:
         match resolved:
             case ResolvedTimeline(tasks=seq_tasks):

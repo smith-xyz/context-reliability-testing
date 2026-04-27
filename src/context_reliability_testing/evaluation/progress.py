@@ -82,8 +82,9 @@ def _stream_result(console: Console, result: TrialResult, count: int, total: int
     """Render a trial result to the streaming console."""
     status = "[green]PASS[/green]" if result.passed else "[red]FAIL[/red]"
     time_s = f"{result.wall_time_s:.1f}s" if result.wall_time_s else "—"
+    tokens = f" {result.tokens.total:,}tok" if result.tokens else ""
     cost = f" ${result.cost_usd:.4f}" if result.cost_usd is not None else ""
-    console.print(f"  [{count}/{total}] {status} {time_s}{cost}")
+    console.print(f"  [{count}/{total}] {status} {time_s}{tokens}{cost}")
     if result.assertion_results:
         for a in result.assertion_results:
             if not a.passed:
@@ -119,6 +120,7 @@ class ProgressDisplay:
         table.add_column("Condition", min_width=12)
         table.add_column("Result", min_width=8)
         table.add_column("Time", justify="right", min_width=8)
+        table.add_column("Tokens", justify="right", min_width=8)
         table.add_column("Cost", justify="right", min_width=8)
 
         for i, r in enumerate(self.completed, 1):
@@ -130,6 +132,7 @@ class ProgressDisplay:
             else:
                 status = "[red]FAIL[/red]"
             time_s = f"{r.wall_time_s:.1f}s" if r.wall_time_s else "—"
+            tokens = f"{r.tokens.total:,}" if r.tokens else "—"
             cost = f"${r.cost_usd:.4f}" if r.cost_usd is not None else "—"
             table.add_row(
                 str(i),
@@ -138,6 +141,7 @@ class ProgressDisplay:
                 r.condition,
                 status,
                 time_s,
+                tokens,
                 cost,
             )
 
@@ -153,6 +157,7 @@ class ProgressDisplay:
                 "",
                 "[dim]running[/dim]",
                 f"[cyan]{timer}[/cyan]",
+                "",
                 "",
             )
 

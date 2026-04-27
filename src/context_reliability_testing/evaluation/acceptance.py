@@ -9,6 +9,8 @@ from typing import Protocol
 
 from ..models import AcceptanceType, EvalTask
 
+_MAX_REASON_LINES = 30
+
 
 @dataclass
 class AcceptanceResult:
@@ -51,8 +53,9 @@ class TestCommandStrategy:
             return AcceptanceResult(passed=False, reason=f"test command timed out after {timeout}s")
         if proc.returncode == 0:
             return AcceptanceResult(passed=True, reason="")
-        err = (proc.stderr or proc.stdout or "").strip() or f"exit code {proc.returncode}"
-        return AcceptanceResult(passed=False, reason=err)
+        tail = (proc.stderr or proc.stdout or "").strip().splitlines()[-_MAX_REASON_LINES:]
+        reason = "\n".join(tail) if tail else f"exit code {proc.returncode}"
+        return AcceptanceResult(passed=False, reason=reason)
 
     def _run_passthrough(self, cmd: str, worktree: Path, timeout: int) -> AcceptanceResult:
         """Run with stdout inherited so the user sees test output directly."""

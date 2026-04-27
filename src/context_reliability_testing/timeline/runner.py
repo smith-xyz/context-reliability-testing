@@ -20,10 +20,10 @@ from ..models import (
     RunConfig,
     SequentialTask,
     TimelineMode,
+    TokenUsage,
 )
 from ..workspace import DiffStat, WorkspaceManager, apply_condition
-from .divergence import TimelineTracker
-from .models import SnapshotMetrics, StepMetrics, TimelineStep
+from .models import SnapshotMetrics, StepMetrics, TimelineStep, read_steps_jsonl, write_step_jsonl
 
 logger = logging.getLogger(__name__)
 
@@ -32,8 +32,7 @@ logger = logging.getLogger(__name__)
 class ConditionReport:
     condition: str
     run_id: str
-    db_path: Path
-    report_path: Path
+    jsonl_path: Path
     steps: list[TimelineStep]
 
 
@@ -46,7 +45,12 @@ class TimelineRunner:
     driver: Driver
     mode: TimelineMode = TimelineMode.CONTINUOUS
     checker: AcceptanceChecker = field(default_factory=AcceptanceChecker)
-    on_step: Callable[[int, str, bool, int], None] | None = None
+    on_step: (
+        Callable[[int, str, bool | None, int, float, TokenUsage, float | None], None] | None
+    ) = None
+    on_step_start: Callable[[str], None] | None = None
+    on_condition: Callable[[str], None] | None = None
+    on_preflight: Callable[[str], None] | None = None
 
     def preflight(self, out_dir: Path) -> None:
         """Verify acceptance passes on unmodified repo at starting commit."""
@@ -55,7 +59,11 @@ class TimelineRunner:
             raise ValueError("timeline requires 'repo' in run config")
         first = self.tasks[0]
         if first.acceptance.type == AcceptanceType.MANUAL:
+            if self.on_preflight:
+                self.on_preflight("skipped")
             return
+        if self.on_preflight:
+            self.on_preflight("running")
         ws = WorkspaceManager(repo.url, out_dir / ".workspace" / "_preflight", repo.commit)
         ws.clone()
         wt = ws.create_worktree("preflight")
@@ -67,6 +75,8 @@ class TimelineRunner:
                 f"Preflight failed for '{first.id}': {result.reason}. "
                 "Fix the repo baseline before running timeline."
             )
+        if self.on_preflight:
+            self.on_preflight("passed")
 
     def run(self, out_dir: Path) -> list[ConditionReport]:
         """Run all conditions and return per-condition reports."""
@@ -78,6 +88,8 @@ class TimelineRunner:
         reports: list[ConditionReport] = []
 
         for cond_name, condition in self.config.conditions.items():
+            if self.on_condition:
+                self.on_condition(cond_name)
             report = self._run_condition(cond_name, condition, out_dir)
             reports.append(report)
 
@@ -96,56 +108,57 @@ class TimelineRunner:
             worktree = ws.create_worktree("timeline", persistent=True)
             apply_condition(worktree, condition, self.config.context_patterns)
 
-        db_path = out_dir / f"timeline-{cond_name}.db"
-        with TimelineTracker(db_path) as tracker:
-            run_id = tracker.create_run(
-                repo.url,
-                repo.commit,
-                str(self.config.driver.command or self.config.driver.builtin),
-                cond_name,
-                self.config.agent.model,
-            )
+        jsonl_path = out_dir / f"timeline-{cond_name}.jsonl"
+        run_id = str(__import__("uuid").uuid4())
 
-            for seq_task in self.tasks:
-                if self.mode == TimelineMode.ANCHORED:
-                    if worktree is not None:
-                        ws.cleanup_worktree(worktree)
-                    worktree = ws.create_worktree(
-                        f"timeline-{seq_task.task_order}",
-                        commit=seq_task.resolved_commit,
-                        persistent=True,
-                    )
-                    apply_condition(worktree, condition, self.config.context_patterns)
+        for seq_task in self.tasks:
+            if self.mode == TimelineMode.ANCHORED:
+                if worktree is not None:
+                    ws.cleanup_worktree(worktree)
+                worktree = ws.create_worktree(
+                    f"timeline-{seq_task.task_order}",
+                    commit=seq_task.resolved_commit,
+                    persistent=True,
+                )
+                apply_condition(worktree, condition, self.config.context_patterns)
 
-                if worktree is None:
-                    raise RuntimeError("worktree not initialized — check timeline mode config")
+            if worktree is None:
+                raise RuntimeError("worktree not initialized — check timeline mode config")
 
-                step = self._run_step(ws, worktree, seq_task)
-                tracker.record_step(run_id, step)
+            if self.on_step_start:
+                self.on_step_start(seq_task.id)
+            step = self._run_step(ws, worktree, seq_task)
+            write_step_jsonl(jsonl_path, step)
 
-                if self.on_step:
-                    self.on_step(
-                        seq_task.task_order,
-                        seq_task.id,
-                        step.step.tests_pass,
-                        step.snapshot.line_delta,
-                    )
+            if self.on_step:
+                passed: bool | None = (
+                    None
+                    if seq_task.acceptance.type == AcceptanceType.MANUAL
+                    else step.step.tests_pass
+                )
+                self.on_step(
+                    seq_task.task_order,
+                    seq_task.id,
+                    passed,
+                    step.snapshot.line_delta,
+                    step.step.wall_time_s,
+                    step.step.tokens,
+                    step.step.cost_usd,
+                )
 
-                if (
-                    not step.step.tests_pass
-                    and self.config.on_failure == FailurePolicy.SKIP_REMAINING
-                ):
-                    break
+            if (
+                not step.step.tests_pass
+                and seq_task.acceptance.type != AcceptanceType.MANUAL
+                and self.config.on_failure == FailurePolicy.SKIP_REMAINING
+            ):
+                break
 
-        with TimelineTracker(db_path) as reader:
-            steps = reader.get_run(run_id)
-
+        steps = read_steps_jsonl(jsonl_path)
         ws.teardown()
         return ConditionReport(
             condition=cond_name,
             run_id=run_id,
-            db_path=db_path,
-            report_path=db_path,
+            jsonl_path=jsonl_path,
             steps=steps,
         )
 
@@ -195,6 +208,7 @@ class TimelineRunner:
             tokens=dr.tokens,
             wall_time_s=dr.wall_time_s,
             tool_calls=dr.tool_calls,
+            cost_usd=dr.cost_usd,
             error=dr.error,
         )
 

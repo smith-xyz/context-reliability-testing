@@ -1,7 +1,6 @@
 """Timeline evaluation: sequential task divergence tracking."""
 
-from .divergence import TimelineTracker
-from .models import SnapshotMetrics, StepMetrics, TimelineStep
+from .models import SnapshotMetrics, StepMetrics, TimelineStep, read_steps_jsonl, write_step_jsonl
 from .runner import ConditionReport, TimelineRunner
 
 __all__ = [
@@ -10,5 +9,6 @@ __all__ = [
     "StepMetrics",
     "TimelineRunner",
     "TimelineStep",
-    "TimelineTracker",
+    "read_steps_jsonl",
+    "write_step_jsonl",
 ]

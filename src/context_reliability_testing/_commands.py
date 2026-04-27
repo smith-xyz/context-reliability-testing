@@ -11,6 +11,7 @@ from pathlib import Path
 
 from jinja2 import Environment, FileSystemLoader
 from rich.console import Console
+from rich.live import Live
 
 from .artifacts import AssertionRunner
 from .drivers import make_driver
@@ -29,11 +30,13 @@ from .models import (
     RunResult,
     SequentialTask,
     TimelineMode,
+    TokenUsage,
     TrialResult,
 )
 from .reporting import write_result_json, write_summary_md
 from .resolve import collect_context_paths
 from .timeline import TimelineRunner
+from .timeline.progress import TimelineProgressDisplay
 from .workspace import WorkspaceManager
 
 
@@ -176,9 +179,28 @@ def run_timeline(
         console.print("Dry run — no agents invoked.")
         return
 
-    def on_step(order: int, task_id: str, passed: bool, divergence: int) -> None:
-        status = "[green]PASS[/green]" if passed else "[red]FAIL[/red]"
-        console.print(f"  Step {order}: {task_id} — {status} | divergence: {divergence} lines")
+    total = len(seq_tasks) * len(run_cfg.conditions)
+    progress = TimelineProgressDisplay(total)
+
+    def on_preflight(status: str) -> None:
+        progress.set_preflight(status)
+
+    def on_condition(name: str) -> None:
+        progress.start_condition(name)
+
+    def on_step_start(task_id: str) -> None:
+        progress.start_step(task_id)
+
+    def on_step(
+        order: int,
+        task_id: str,
+        passed: bool | None,
+        divergence: int,
+        wall_time: float,
+        tokens: TokenUsage,
+        cost_usd: float | None,
+    ) -> None:
+        progress.finish_step(task_id, passed, divergence, wall_time, tokens, cost_usd)
 
     runner = TimelineRunner(
         config=run_cfg,
@@ -186,9 +208,16 @@ def run_timeline(
         driver=make_driver(run_cfg.driver, stream=stream),
         mode=mode,
         on_step=on_step,
+        on_step_start=on_step_start,
+        on_condition=on_condition,
+        on_preflight=on_preflight,
     )
     try:
-        reports = runner.run(out_dir)
+        with Live(progress, console=console, refresh_per_second=2):
+            reports = runner.run(out_dir)
+    except KeyboardInterrupt:
+        console.print("\n[yellow]Aborted.[/yellow] Partial results written to output dir.")
+        return
     except PreflightError as exc:
         raise ConfigError(str(exc)) from exc
 
@@ -210,4 +239,4 @@ def run_timeline(
             encoding="utf-8",
         )
         console.print(f"  Report: {report_path}")
-        console.print(f"  Database: {rpt.db_path}")
+        console.print(f"  Data: {rpt.jsonl_path}")
