@@ -371,6 +371,12 @@ Compare two runs for regressions:
 uv run crt compare --baseline out/baseline.json --current out/results.json
 ```
 
+### Interpreting results
+
+A trial passes when all three hold: the acceptance command succeeds, all assertion tests pass, and the agent stays within `max_steps`. The acceptance command tells you if the code works. Assertions go further — they let you check anything about the agent's output: code style, test coverage, file scope, absence of hardcoded values, or any project-specific concern. `max_steps` catches runaway agents. Together they define what "pass" means for your project.
+
+Beyond pass/fail, review the diffs, token usage, cost, and turn counts across conditions. Run multiple trials (`trials: 3` or higher) so deltas aren't just variance. Context files that reduce tokens and turns are guiding the agent toward shorter paths, even when pass rate is identical.
+
 ## Running in a container
 
 Run CRT inside a container for isolation. The agent, worktrees, and all execution stay contained — only output reports come back to the host.
