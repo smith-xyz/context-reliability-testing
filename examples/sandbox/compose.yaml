@@ -1,0 +1,69 @@
+# Network-allowlisted CRT runner.
+#
+# Runs CRT behind a filtering proxy so only allowlisted domains are reachable.
+# Blocked requests appear as TCP_DENIED in the proxy access log — inspect them
+# to see if a context file caused the agent to make unwanted network requests.
+#
+# Usage:
+#   docker compose -f examples/sandbox/compose.yaml build
+#   docker compose -f examples/sandbox/compose.yaml run --rm crt
+#
+# Inspect blocked requests:
+#   docker compose -f examples/sandbox/compose.yaml exec proxy \
+#     cat /var/log/squid/access.log | grep DENIED
+#
+# Extract unique domains hit:
+#   docker compose -f examples/sandbox/compose.yaml exec proxy \
+#     cat /var/log/squid/access.log | awk '/CONNECT/{print $7}' | sort -u
+#
+# Cleanup:
+#   docker compose -f examples/sandbox/compose.yaml down
+
+services:
+  proxy:
+    image: ubuntu/squid:latest
+    volumes:
+      - ./squid.conf:/etc/squid/squid.conf:ro
+      - ./allowed-domains.txt:/etc/squid/allowed-domains.txt:ro
+    networks:
+      - external
+      - internal
+    healthcheck:
+      test: ["CMD", "squid", "-k", "check"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+
+  crt:
+    build:
+      context: ../..
+      dockerfile: examples/sandbox/Dockerfile
+    environment:
+      # Proxy (HTTPS only)
+      - https_proxy=http://proxy:3128
+      - HTTPS_PROXY=http://proxy:3128
+      - no_proxy=localhost,127.0.0.1
+      # Auth — uncomment one block:
+      # Direct API:
+      #- ANTHROPIC_API_KEY
+      # Vertex AI:
+      - CLAUDE_CODE_USE_VERTEX
+      - ANTHROPIC_VERTEX_PROJECT_ID
+      - CLOUD_ML_REGION
+    volumes:
+      - ./config:/config:ro
+      - ./out:/out
+      # Vertex AI credentials (swap for ~/.claude if using direct API):
+      #- ~/.config/gcloud:/root/.config/gcloud:ro
+    networks:
+      - internal
+    depends_on:
+      proxy:
+        condition: service_healthy
+    command: ["run", "--config", "/config/config.yaml", "--tasks", "/config/tasks.yaml", "--output", "/out"]
+
+networks:
+  external: {}
+  internal:
+    internal: true

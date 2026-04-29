@@ -371,6 +371,23 @@ Compare two runs for regressions:
 uv run crt compare --baseline out/baseline.json --current out/results.json
 ```
 
+## Running in a container
+
+Run CRT inside a container for isolation. The agent, worktrees, and all execution stay contained — only output reports come back to the host.
+
+The recommended setup uses docker-compose with a filtering proxy for network allowlisting. Blocked requests are logged so you can see if a context file caused unwanted outbound traffic.
+
+See `examples/sandbox/` for the full setup:
+- `Dockerfile` — base image (swap `FROM` for your toolchain)
+- `compose.yaml` — proxy + CRT topology
+- `squid.conf` — proxy config (allowlist or permissive)
+- `allowed-domains.txt` — domain allowlist
+
+```bash
+docker compose -f examples/sandbox/compose.yaml build
+docker compose -f examples/sandbox/compose.yaml run --rm crt
+```
+
 ## Configuration reference
 
 ### Run config fields

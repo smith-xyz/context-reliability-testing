@@ -66,6 +66,12 @@ uv run crt run --config crt-config.yaml --tasks crt-tasks.yaml
 uv run crt compare --baseline out/baseline.json --current out/results.json
 ```
 
+## Container usage
+
+Agents run with broad permissions — container isolation enforces least privilege over filesystem, user, and network access. See `examples/sandbox/` for a complete setup with network allowlisting via a filtering proxy.
+
+See [USAGE.md](USAGE.md#running-in-a-container) for details.
+
 ## Commands
 
 | Command | Description |

@@ -1,0 +1,12 @@
+# Anthropic API (Claude CLI auth + direct API)
+.anthropic.com
+
+# Google Cloud / Vertex AI
+.googleapis.com
+
+# GitHub (repo cloning)
+.github.com
+
+# Python packages (CRT install + agent pip usage)
+.pypi.org
+.pythonhosted.org
