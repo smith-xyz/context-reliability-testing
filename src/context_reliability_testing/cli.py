@@ -4,24 +4,60 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+from typing import NoReturn
 
 import typer
-import yaml
 from rich.console import Console
+from rich.markup import escape
 
 from ._commands import RunOptions, run_eval, run_timeline
-from .errors import ConfigError
+from .errors import CRTError
 from .models import RunConfig, RunResult, TimelineMode
+from .parsing import parse_yaml, read_text, validate_json, validate_model
 from .resolve import ResolvedEval, ResolvedTimeline, resolve_tasks
-from .scaffold import scaffold
+
+logger = logging.getLogger(__name__)
+
+
+def _print_crt_error(console: Console, exc: CRTError) -> None:
+    """CRT domain errors: fixed header, message body (multi-line safe, markup escaped)."""
+    text = str(exc).strip() or exc.__class__.__name__
+    console.print("[red bold]Error[/red bold]")
+    for line in text.splitlines():
+        console.print(f"  [red]{escape(line)}[/red]")
+
+
+def _print_unexpected_error(console: Console, exc: BaseException, *, verbose: bool) -> None:
+    """Everything else: different label so it is obvious this was not a CRTError."""
+    logger.exception("unexpected error")
+    if verbose:
+        console.print("[yellow bold]Unexpected error[/yellow bold]")
+        console.print_exception()
+        return
+    text = str(exc).strip() or exc.__class__.__name__
+    console.print("[yellow bold]Unexpected error[/yellow bold]")
+    for line in text.splitlines():
+        console.print(f"  [dim]{escape(line)}[/dim]")
+
+
+def _exit_with_error(console: Console, exc: BaseException, *, verbose: bool = False) -> NoReturn:
+    if isinstance(exc, CRTError):
+        _print_crt_error(console, exc)
+    else:
+        _print_unexpected_error(console, exc, verbose=verbose)
+    raise typer.Exit(code=1) from None
+
 
 app = typer.Typer(help="context-reliability-testing: A/B test coding-agent context stacks.")
 
 
 @app.callback()
 def main(
+    ctx: typer.Context,
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable debug logging."),
 ) -> None:
+    ctx.ensure_object(dict)
+    ctx.obj["verbose"] = verbose
     level = logging.DEBUG if verbose else logging.WARNING
     logging.basicConfig(level=level, format="%(name)s %(levelname)s %(message)s")
 
@@ -33,6 +69,7 @@ def main(
 
 @app.command()
 def init(
+    ctx: typer.Context,
     directory: Path = typer.Argument(Path("."), help="Repo directory to scaffold configs for."),
     output: Path = typer.Option(Path("."), "--output", "-o", help="Where to write config files."),
     test_cmd: str | None = typer.Option(
@@ -48,16 +85,25 @@ def init(
     ),
 ) -> None:
     """Scaffold starter config files by detecting context files in a repo."""
-    result = scaffold(directory.resolve(), test_cmd=test_cmd, model=model)
-    out = output.resolve()
-    out.mkdir(parents=True, exist_ok=True)
+    from .scaffold import scaffold
 
-    config_path = out / "crt-config.yaml"
-    tasks_path = out / "crt-tasks.yaml"
-    assertions_path = out / "crt_assertions.py"
-    config_path.write_text(result.config_yaml, encoding="utf-8")
-    tasks_path.write_text(result.tasks_yaml, encoding="utf-8")
-    assertions_path.write_text(result.assertions_py, encoding="utf-8")
+    console = Console()
+    verbose = bool(ctx.obj.get("verbose"))
+    try:
+        result = scaffold(directory.resolve(), test_cmd=test_cmd, model=model)
+        out = output.resolve()
+        out.mkdir(parents=True, exist_ok=True)
+
+        config_path = out / "crt-config.yaml"
+        tasks_path = out / "crt-tasks.yaml"
+        assertions_path = out / "crt_assertions.py"
+        config_path.write_text(result.config_yaml, encoding="utf-8")
+        tasks_path.write_text(result.tasks_yaml, encoding="utf-8")
+        assertions_path.write_text(result.assertions_py, encoding="utf-8")
+    except typer.Exit:
+        raise
+    except Exception as exc:
+        _exit_with_error(console, exc, verbose=verbose)
 
     for warn in result.warnings:
         typer.echo(f"⚠  {warn}", err=True)
@@ -81,6 +127,7 @@ def init(
 
 @app.command()
 def run(
+    ctx: typer.Context,
     config: Path = typer.Option(..., "--config", "-c", help="Run config YAML."),
     tasks: Path | None = typer.Option(None, "--tasks", "-t", help="Task set YAML."),
     commit_range: str | None = typer.Option(
@@ -123,26 +170,26 @@ def run(
     ),
 ) -> None:
     """Run tasks under different context conditions and measure results."""
-    run_cfg = RunConfig.model_validate(yaml.safe_load(config.read_text()))
-    out_dir = output if output != Path("out/") else run_cfg.output_dir
-    run_cfg.output_dir = out_dir
     console = Console()
-
+    verbose = bool(ctx.obj.get("verbose"))
     try:
+        cfg_path = config.resolve()
+        cfg_text = read_text(cfg_path, "config")
+        raw = parse_yaml(cfg_text, cfg_path)
+        run_cfg = validate_model(RunConfig, raw, "run config")
+
+        out_dir = output if output != Path("out/") else run_cfg.output_dir
+        run_cfg.output_dir = out_dir
         resolved = resolve_tasks(tasks, commit_range, acceptance_cmd, run_cfg, out_dir)
-    except ConfigError as exc:
-        console.print(f"[red]Error:[/red] {exc}")
-        raise typer.Exit(code=1) from None
 
-    if (
-        isinstance(resolved, ResolvedEval)
-        and parallel == 1
-        and len(resolved.tasks) > 1
-        and not stream
-    ):
-        console.print("[dim]Tip: use --parallel/-p to run trials concurrently.[/dim]")
+        if (
+            isinstance(resolved, ResolvedEval)
+            and parallel == 1
+            and len(resolved.tasks) > 1
+            and not stream
+        ):
+            console.print("[dim]Tip: use --parallel/-p to run trials concurrently.[/dim]")
 
-    try:
         match resolved:
             case ResolvedTimeline(tasks=seq_tasks):
                 if parallel > 1:
@@ -162,9 +209,10 @@ def run(
                     parallel=parallel,
                 )
                 run_eval(run_cfg, eval_tasks, opts)
-    except ConfigError as exc:
-        console.print(f"[red]Error:[/red] {exc}")
-        raise typer.Exit(code=1) from None
+    except typer.Exit:
+        raise
+    except Exception as exc:
+        _exit_with_error(console, exc, verbose=verbose)
 
 
 # ---------------------------------------------------------------------------
@@ -174,12 +222,23 @@ def run(
 
 @app.command()
 def compare(
+    ctx: typer.Context,
     baseline: Path = typer.Option(..., "--baseline", "-b", help="Previous results.json."),
     current: Path = typer.Option(..., "--current", "-C", help="Current results.json."),
 ) -> None:
     """Compare two result files and report regressions."""
-    base = RunResult.model_validate_json(baseline.read_text())
-    curr = RunResult.model_validate_json(current.read_text())
+    console = Console()
+    verbose = bool(ctx.obj.get("verbose"))
+    try:
+        base_raw = read_text(baseline, "baseline")
+        curr_raw = read_text(current, "current")
+        base = validate_json(RunResult, base_raw, "results JSON")
+        curr = validate_json(RunResult, curr_raw, "results JSON")
+    except typer.Exit:
+        raise
+    except Exception as exc:
+        _exit_with_error(console, exc, verbose=verbose)
+
     typer.echo(f"Baseline: {base.run_id} ({base.timestamp.date()})")
     typer.echo(f"Current:  {curr.run_id} ({curr.timestamp.date()})\n")
 

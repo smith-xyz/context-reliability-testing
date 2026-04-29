@@ -28,7 +28,7 @@ def _analyze_context_files(
     """Run heuristic classification on context files for the report."""
     try:
         from .heuristics import RuleParser, load_heuristics_config
-    except Exception:
+    except ImportError:
         return None
 
     cfg = load_heuristics_config(heuristics_config)

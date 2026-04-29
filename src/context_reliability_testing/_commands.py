@@ -16,7 +16,7 @@ from rich.live import Live
 from .artifacts import AssertionRunner
 from .drivers import make_driver
 from .drivers.stub import StubDriver
-from .errors import ConfigError, PreflightError
+from .errors import ConfigError
 from .evaluation import (
     AcceptanceChecker,
     EvalRunner,
@@ -112,13 +112,10 @@ def run_eval(
         tasks=eval_tasks,
         executor=executor,
     )
-    try:
-        if opts.headless:
-            trials = run_headless(runner, opts.console, total, parallel=opts.parallel)
-        else:
-            trials = run_streaming(runner, opts.console, total, parallel=opts.parallel)
-    except PreflightError as exc:
-        raise ConfigError(str(exc)) from exc
+    if opts.headless:
+        trials = run_headless(runner, opts.console, total, parallel=opts.parallel)
+    else:
+        trials = run_streaming(runner, opts.console, total, parallel=opts.parallel)
 
     _report_eval(trials, run_cfg, workspace, opts)
 
@@ -167,7 +164,7 @@ def run_timeline(
     dry_run: bool,
 ) -> None:
     if not run_cfg.repo:
-        raise ConfigError("timeline tasks require 'repo' in run config")
+        raise ConfigError("timeline mode requires 'repo' in run config")
 
     out_dir.mkdir(parents=True, exist_ok=True)
     console.print(
@@ -218,8 +215,6 @@ def run_timeline(
     except KeyboardInterrupt:
         console.print("\n[yellow]Aborted.[/yellow] Partial results written to output dir.")
         return
-    except PreflightError as exc:
-        raise ConfigError(str(exc)) from exc
 
     env = _jinja_env()
     for rpt in reports:

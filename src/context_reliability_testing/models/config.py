@@ -8,6 +8,8 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from ..errors import ConfigError
+
 logger = logging.getLogger(__name__)
 
 
@@ -46,7 +48,7 @@ class DriverConfig(BaseModel):
     @model_validator(mode="after")
     def exactly_one_set(self) -> DriverConfig:
         if bool(self.command) == bool(self.builtin):
-            raise ValueError("specify exactly one of 'command' or 'builtin'")
+            raise ConfigError("specify exactly one of 'command' or 'builtin'")
         return self
 
 

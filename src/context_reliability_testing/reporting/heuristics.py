@@ -14,6 +14,9 @@ from pathlib import Path
 
 from pydantic import BaseModel, model_validator
 
+from ..errors import DataValidationError
+from ..parsing import parse_yaml, read_text, validate_model
+
 
 class RuleClassification(StrEnum):
     NEGATIVE = "negative"
@@ -125,9 +128,9 @@ class RuleParser:
 
 def load_heuristics_config(path: Path) -> HeuristicsConfig:
     """Load a user-provided heuristics config YAML."""
-    import yaml
-
-    data = yaml.safe_load(path.read_text())
+    p = path.resolve()
+    raw = read_text(p, "heuristics config")
+    data = parse_yaml(raw, p)
     if not isinstance(data, dict):
-        raise ValueError(f"heuristics config must be a YAML mapping, got {type(data).__name__}")
-    return HeuristicsConfig.model_validate(data)
+        raise DataValidationError.not_mapping(p, type(data).__name__)
+    return validate_model(HeuristicsConfig, data, "heuristics config")

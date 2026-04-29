@@ -12,7 +12,7 @@ import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from ..artifacts import AssertionRunner, TrialBundle
+from ..artifacts import AssertionError_, AssertionRunner, TrialBundle
 from ..drivers.base import Driver, DriverResult
 from ..models import AssertionOutcome, Condition, EvalTask, RunConfig, TrialResult
 from ..workspace import WorkspaceManager, apply_condition
@@ -163,6 +163,15 @@ class TrialExecutor:
                 assertion_results = await asyncio.to_thread(
                     self.assertion_runner.run, task.assertions, ctx
                 )
+            except AssertionError_ as exc:
+                logger.warning("Assertion execution failed for %s: %s", task.id, exc)
+                assertion_results = [
+                    AssertionOutcome(
+                        name="assertions",
+                        passed=False,
+                        message=str(exc),
+                    )
+                ]
             except Exception:
                 logger.exception("Assertion execution failed for %s", task.id)
 

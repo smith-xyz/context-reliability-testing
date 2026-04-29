@@ -6,6 +6,7 @@ import logging
 import shutil
 from pathlib import Path
 
+from ..errors import ContextFileError
 from ..models import Condition
 
 logger = logging.getLogger(__name__)
@@ -34,7 +35,7 @@ def apply_condition(
         elif wt_src.is_file():
             saved[rel] = wt_src.read_bytes()
         else:
-            raise FileNotFoundError(f"context file not found: {rel}")
+            raise ContextFileError(rel)
 
     for path in sorted(to_remove, key=lambda p: len(p.parts), reverse=True):
         if not path.exists():

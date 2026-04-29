@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from ..errors import DriverConfigError
 from ..models import DriverConfig
 from .base import Driver, DriverResult
 from .stub import StubDriver
@@ -19,5 +20,5 @@ def make_driver(config: DriverConfig, *, stream: bool = False) -> Driver:
             stream=stream,
         )
     if config.builtin:
-        raise ValueError(f"unknown builtin driver: {config.builtin!r}")
-    raise ValueError("driver config: need builtin or command")
+        raise DriverConfigError.unknown_builtin(config.builtin)
+    raise DriverConfigError("driver config: need builtin or command")

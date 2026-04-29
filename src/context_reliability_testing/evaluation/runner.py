@@ -89,10 +89,10 @@ class EvalRunner:
         )
         if dr.error:
             detail = dr.raw_output.strip()[:500] if dr.raw_output.strip() else ""
-            hint = f"\n\nAgent output:\n{detail}" if detail else ""
-            raise PreflightError(
-                f"Agent smoke test failed: {dr.error}. "
-                f"Check your driver config, agent auth, and CLI flags.{hint}"
+            raise PreflightError.smoke_test(
+                dr.error,
+                hint="Check your driver config, agent auth, and CLI flags.",
+                output=detail,
             )
         self._emit(PhaseInfo(PhaseKind.SMOKE_TEST, PhaseState.PASSED))
 
@@ -107,9 +107,10 @@ class EvalRunner:
         self._emit(PhaseInfo(PhaseKind.PREFLIGHT, detail=task.id))
         result = self._checker.check(task, worktree)
         if not result.passed:
-            raise PreflightError(
-                f"Preflight failed for task '{task.id}': {result.reason}. "
-                "Fix the repo baseline before running evaluations."
+            raise PreflightError.baseline(
+                task.id,
+                result.reason,
+                hint="Fix the repo baseline before running evaluations.",
             )
         self._preflight_done[cmd] = task.id
         self._emit(PhaseInfo(PhaseKind.PREFLIGHT, PhaseState.PASSED, detail=task.id))

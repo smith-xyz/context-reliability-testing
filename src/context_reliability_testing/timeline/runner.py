@@ -10,7 +10,7 @@ from pathlib import Path
 
 from ..drivers import Driver
 from ..drivers.base import DriverResult
-from ..errors import PreflightError
+from ..errors import ConfigError, CRTError, InternalError, PreflightError
 from ..evaluation.acceptance import AcceptanceChecker
 from ..models import (
     AcceptanceType,
@@ -56,7 +56,7 @@ class TimelineRunner:
         """Verify acceptance passes on unmodified repo at starting commit."""
         repo = self.config.repo
         if not repo:
-            raise ValueError("timeline requires 'repo' in run config")
+            raise ConfigError("timeline mode requires 'repo' in run config")
         first = self.tasks[0]
         if first.acceptance.type == AcceptanceType.MANUAL:
             if self.on_preflight:
@@ -71,9 +71,10 @@ class TimelineRunner:
         result = self.checker.check(task, wt)
         ws.teardown()
         if not result.passed:
-            raise PreflightError(
-                f"Preflight failed for '{first.id}': {result.reason}. "
-                "Fix the repo baseline before running timeline."
+            raise PreflightError.baseline(
+                first.id,
+                result.reason,
+                hint="Fix the repo baseline before running timeline.",
             )
         if self.on_preflight:
             self.on_preflight("passed")
@@ -82,7 +83,7 @@ class TimelineRunner:
         """Run all conditions and return per-condition reports."""
         repo = self.config.repo
         if not repo:
-            raise ValueError("timeline requires 'repo' in run config")
+            raise ConfigError("timeline mode requires 'repo' in run config")
 
         self.preflight(out_dir)
         reports: list[ConditionReport] = []
@@ -123,7 +124,7 @@ class TimelineRunner:
                 apply_condition(worktree, condition, self.config.context_patterns)
 
             if worktree is None:
-                raise RuntimeError("worktree not initialized — check timeline mode config")
+                raise InternalError("worktree not initialized — check timeline mode config")
 
             if self.on_step_start:
                 self.on_step_start(seq_task.id)
@@ -227,6 +228,8 @@ class TimelineRunner:
         empty = DiffStat(files_changed=[], lines_added=0, lines_removed=0)
         try:
             return ws.git(["diff", ref, "HEAD"], cwd=worktree), ws.diff_stat(worktree, ref)
+        except CRTError:
+            raise
         except Exception as exc:
             logger.debug("diff against %s failed: %s", ref, exc)
             return "", empty
@@ -236,6 +239,8 @@ class TimelineRunner:
         try:
             out = ws.git(["diff", "--name-only", "HEAD~1", "HEAD"], cwd=worktree)
             return [f for f in out.strip().splitlines() if f]
+        except CRTError:
+            raise
         except Exception as exc:
             logger.debug("agent diff failed: %s", exc)
             return []
@@ -244,6 +249,8 @@ class TimelineRunner:
     def _safe_actual_files(ws: WorkspaceManager, resolved_commit: str) -> list[str]:
         try:
             return ws.diff_stat_range(f"{resolved_commit}~1", resolved_commit).files_changed
+        except CRTError:
+            raise
         except Exception as exc:
             logger.debug("actual diff for %s failed: %s", resolved_commit, exc)
             return []

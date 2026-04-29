@@ -6,9 +6,9 @@ from dataclasses import dataclass
 from itertools import chain
 from pathlib import Path
 
-import yaml
+from pydantic import ValidationError
 
-from .errors import ConfigError
+from .errors import ConfigError, DataValidationError
 from .models import (
     Acceptance,
     AcceptanceType,
@@ -16,6 +16,7 @@ from .models import (
     RunConfig,
     SequentialTask,
 )
+from .parsing import parse_yaml, read_text
 from .workspace import WorkspaceManager
 
 
@@ -83,16 +84,7 @@ def resolve_tasks(
         raise ConfigError("provide --tasks or --range")
 
     if tasks_path:
-        raw = yaml.safe_load(tasks_path.read_text())
-        items = raw if isinstance(raw, list) else [raw]
-        if items and "task_order" in items[0]:
-            return ResolvedTimeline(
-                sorted(
-                    [SequentialTask.model_validate(t) for t in items],
-                    key=lambda t: t.task_order,
-                )
-            )
-        return ResolvedEval([EvalTask.model_validate(t) for t in items])
+        return _load_tasks_file(tasks_path)
 
     if not commit_range or not run_cfg.repo:
         raise ConfigError("--range requires 'repo' in run config")
@@ -118,3 +110,34 @@ def collect_context_paths(run_cfg: RunConfig, workspace: WorkspaceManager | None
     files = set(chain.from_iterable(c.context_files for c in run_cfg.conditions.values()))
     clone = workspace.clone_dir
     return [clone / f for f in sorted(files) if (clone / f).exists()]
+
+
+def _task_items_from_document(raw: object) -> list:
+    if raw is None:
+        return []
+    if isinstance(raw, list):
+        return raw
+    return [raw]
+
+
+def _resolved_from_task_items(items: list, path: Path) -> ResolvedEval | ResolvedTimeline:
+    if not items:
+        return ResolvedEval([])
+    try:
+        head = items[0]
+        if isinstance(head, dict) and "task_order" in head:
+            seq = sorted(
+                (SequentialTask.model_validate(t) for t in items),
+                key=lambda t: t.task_order,
+            )
+            return ResolvedTimeline(list(seq))
+        return ResolvedEval([EvalTask.model_validate(t) for t in items])
+    except ValidationError as exc:
+        raise DataValidationError.schema(f"tasks in {path}", exc) from exc
+
+
+def _load_tasks_file(tasks_path: Path) -> ResolvedEval | ResolvedTimeline:
+    path = tasks_path.resolve()
+    text = read_text(path, "tasks")
+    raw = parse_yaml(text, path)
+    return _resolved_from_task_items(_task_items_from_document(raw), path)

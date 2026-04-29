@@ -10,6 +10,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from uuid import uuid4
 
+from ..errors import WorkspaceError
+
 logger = logging.getLogger(__name__)
 
 
@@ -18,10 +20,6 @@ class DiffStat:
     files_changed: list[str]
     lines_added: int
     lines_removed: int
-
-
-class WorkspaceError(Exception):
-    """Raised when a git workspace operation fails."""
 
 
 class WorkspaceManager:

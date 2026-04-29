@@ -9,6 +9,7 @@ import sys
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
+from ..errors import CRTError
 from ..models import AssertionOutcome
 from .context import TrialContext
 
@@ -17,7 +18,7 @@ logger = logging.getLogger(__name__)
 _EXIT_LABELS = {3: "internal error", 4: "usage error", 5: "no tests collected"}
 
 
-class AssertionError_(RuntimeError):
+class AssertionError_(CRTError, RuntimeError):
     """Infrastructure failure in assertion execution (not a test failure)."""
 
 
